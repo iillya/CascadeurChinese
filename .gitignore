@@ -30,3 +30,20 @@
 *.exe
 *.out
 *.app
+
+# Build output / runtime artifacts
+build/
+dist/
+__pycache__/
+*.pyc
+*.res
+*.exp
+*.ilk
+*.pdb
+*.log
+untranslated_zh.json
+drawtext_captured.txt
+*.tmp
+
+# Full Qt source trees (bundled SDK headers/libs live in third_party\qt*sdk)
+third_party/qtbase-6.6.0/
