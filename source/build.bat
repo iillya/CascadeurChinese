@@ -7,14 +7,15 @@ set "CPP=%ROOT%\source"
 set "OUT=%ROOT%\build\out"
 set "OBJDIR=%ROOT%\build\obj"
 set "RES=%ROOT%\icon"
-set "QT=%ROOT%\..\_ThirdParty\qt6sdk"
-if not exist "%QT%\lib\Qt6Gui.lib" set "QT=%ROOT%\third_party\qt6sdk"
+set "QT=%ROOT%\..\_ThirdParty\Qt653\6.5.3\msvc2019_64"
+if not exist "%QT%\lib\Qt6Quick.lib" set "QT=%ROOT%\..\_ThirdParty\qt6sdk"
+if not exist "%QT%\lib\Qt6Quick.lib" set "QT=%ROOT%\third_party\qt6sdk"
 if not exist "%OUT%" mkdir "%OUT%"
 if not exist "%OBJDIR%" mkdir "%OBJDIR%"
 if not exist "%OBJDIR%\detours" mkdir "%OBJDIR%\detours"
 
-if not exist "%QT%\lib\Qt6Gui.lib" (
-    echo [ERROR] Qt 6 SDK not found at %QT%.
+if not exist "%QT%\lib\Qt6Quick.lib" (
+    echo [ERROR] Qt 6.5.3 SDK with Qt Quick was not found at %QT%.
     exit /b 1
 )
 
@@ -46,6 +47,7 @@ cl /nologo /O2 /W3 /LD /EHsc /std:c++17 /Zc:__cplusplus /permissive- /utf-8 ^
    /Fe:"%OUT%\CascadeurChineseHook.dll" ^
    /link /IMPLIB:"%OBJDIR%\CascadeurChineseHook.lib" ^
    "%OBJDIR%\detours.lib" "%QT%\lib\Qt6Core.lib" "%QT%\lib\Qt6Gui.lib" ^
+   "%QT%\lib\Qt6Qml.lib" "%QT%\lib\Qt6Quick.lib" ^
    user32.lib shell32.lib version.lib
 if errorlevel 1 exit /b 1
 
@@ -66,6 +68,7 @@ cl /nologo /O2 /W3 /EHsc /std:c++17 /utf-8 "%CPP%\installer.cpp" ^
 if errorlevel 1 exit /b 1
 
 if not exist "%OUT%\translations" mkdir "%OUT%\translations"
+if exist "%OUT%\translations\cascadeur_ui_zh.json" del /Q "%OUT%\translations\cascadeur_ui_zh.json"
 copy /Y "%ROOT%\translations\dictionary_zh.json" "%OUT%\translations\dictionary_zh.json" >nul
 
 echo === Packing distributable installer ===

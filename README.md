@@ -12,6 +12,8 @@ Cascadeur 的简体中文显示层汉化。当前基线为 **Cascadeur 2026.1.2�
 
 运行发布包中的 `CascadeurChineseSetup.exe`，选择包含 `cascadeur.exe` 的目录（通常为 `C:\Program Files\Cascadeur`）。文件只安装到其下的 `ChineseLauncher` 独立目录，并创建“Cascadeur 中文版”快捷方式。
 
+安装时会把 Cascadeur 工程格式 `.casc` 关联到中文启动器，双击工程即可注入汉化后打开。安装器会先保存原有关联；卸载时删除中文关联并恢复原来的 Cascadeur 打开方式。
+
 - `F3`：临时切换中文/英文显示
 - `Shift` + `~`：增量嗅探运行时出现的未翻译词条并导出到桌面；重复执行只追加新词条，不覆盖已填写的译文
 - 卸载：再次运行安装程序，选择“卸载”
@@ -20,7 +22,7 @@ Cascadeur 的简体中文显示层汉化。当前基线为 **Cascadeur 2026.1.2�
 
 - `source/`：显示层 Hook、启动器、安装器和构建脚本
 - `source/detours/`：Microsoft Detours 注入/挂钩组件
-- `translations/dictionary_zh.json`：中文词典
+- `translations/dictionary_zh.json`：清洗、复核并合并后的正式中文词典
 - `scripts/`：词典检查和候选文字扫描工具
 - `icon/`：程序图标资源
 
@@ -37,3 +39,7 @@ Cascadeur 的简体中文显示层汉化。当前基线为 **Cascadeur 2026.1.2�
 ## 许可
 
 项目本身采用 GPL-3.0 License。Microsoft Detours 保留其原始 MIT 许可与版权声明。
+
+## 项目
+
+Cascadeur 主窗口顶部 `Help` 右侧提供 [Bilibili神说要凑数汉化](https://space.bilibili.com/281243426?spm_id_from=333.1007.0.0) 与 [Github仓库](https://github.com/iillya/CascadeurChinese) 两个可点击署名链接。

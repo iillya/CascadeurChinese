@@ -317,24 +317,29 @@ bool SetCascAssociation(const std::wstring& launcher) {
     const wchar_t* progId = L"CascadeurChinese.casc";
     std::wstring openCmdStr = L"\"" + launcher + L"\" \"%1\"";
     const wchar_t* openCmd = openCmdStr.c_str();
-    // Back up whether a user-level .casc default existed and what it was.
+    // Back up the original user-level default once. A repair/reinstall must
+    // never replace this backup with our own ProgID.
     HKEY bk = nullptr;
     if (RegCreateKeyExW(HKEY_CURRENT_USER,
                         L"Software\\CascadeurChineseLocalizer\\AssocBackup",
                         0, nullptr, 0, KEY_READ | KEY_WRITE, nullptr, &bk, nullptr) == ERROR_SUCCESS) {
-        wchar_t cur[512] = {};
-        DWORD cb = sizeof(cur);
-        if (RegQueryValueExW(HKEY_CURRENT_USER, L"Software\\Classes\\.casc", nullptr,
-                             nullptr, (BYTE*)cur, &cb) == ERROR_SUCCESS) {
-            // RegQueryValueExW fills cb with the string size INCLUDING the
-            // terminating NUL, so write cb bytes (not cb+1, which would read
-            // one byte past a full cb-sized buffer and store an extra NUL).
-            RegSetValueExW(bk, L"spm_default", 0, REG_SZ, (const BYTE*)cur, (DWORD)cb);
-            DWORD one = 1;
-            RegSetValueExW(bk, L"spm_had_default", 0, REG_DWORD, (const BYTE*)&one, sizeof(one));
-        } else {
-            DWORD zero = 0;
-            RegSetValueExW(bk, L"spm_had_default", 0, REG_DWORD, (const BYTE*)&zero, sizeof(zero));
+        DWORD complete = 0, completeSize = sizeof(complete);
+        if (RegQueryValueExW(bk, L"backup_complete", nullptr, nullptr,
+                             reinterpret_cast<BYTE*>(&complete), &completeSize) != ERROR_SUCCESS || !complete) {
+            wchar_t cur[512] = {};
+            DWORD cb = sizeof(cur);
+            DWORD hadDefault = 0;
+            if (RegQueryValueExW(HKEY_CURRENT_USER, L"Software\\Classes\\.casc", nullptr,
+                                 nullptr, reinterpret_cast<BYTE*>(cur), &cb) == ERROR_SUCCESS) {
+                RegSetValueExW(bk, L"casc_default", 0, REG_SZ,
+                               reinterpret_cast<const BYTE*>(cur), cb);
+                hadDefault = 1;
+            }
+            RegSetValueExW(bk, L"casc_had_default", 0, REG_DWORD,
+                           reinterpret_cast<const BYTE*>(&hadDefault), sizeof(hadDefault));
+            complete = 1;
+            RegSetValueExW(bk, L"backup_complete", 0, REG_DWORD,
+                           reinterpret_cast<const BYTE*>(&complete), sizeof(complete));
         }
         RegCloseKey(bk);
     }
@@ -344,6 +349,23 @@ bool SetCascAssociation(const std::wstring& launcher) {
     RegSetValueExW(hk, nullptr, 0, REG_SZ, (const BYTE*)progId, (DWORD)((wcslen(progId) + 1) * 2));
     RegCloseKey(hk);
 
+    const std::wstring classPath = std::wstring(L"Software\\Classes\\") + progId;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, classPath.c_str(), 0, nullptr, 0,
+                        KEY_WRITE, nullptr, &hk, nullptr) == ERROR_SUCCESS) {
+        const wchar_t* description = L"Cascadeur 中文版工程";
+        RegSetValueExW(hk, nullptr, 0, REG_SZ, reinterpret_cast<const BYTE*>(description),
+                       DWORD((wcslen(description) + 1) * sizeof(wchar_t)));
+        RegCloseKey(hk);
+    }
+    const std::wstring iconPath = classPath + L"\\DefaultIcon";
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, iconPath.c_str(), 0, nullptr, 0,
+                        KEY_WRITE, nullptr, &hk, nullptr) == ERROR_SUCCESS) {
+        const std::wstring icon = L"\"" + launcher + L"\",0";
+        RegSetValueExW(hk, nullptr, 0, REG_SZ, reinterpret_cast<const BYTE*>(icon.c_str()),
+                       DWORD((icon.size() + 1) * sizeof(wchar_t)));
+        RegCloseKey(hk);
+    }
+
     HKEY cmd = nullptr;
     std::wstring cmdPath = std::wstring(L"Software\\Classes\\") + progId + L"\\shell\\open\\command";
     if (RegCreateKeyExW(HKEY_CURRENT_USER, cmdPath.c_str(), 0, nullptr, 0, KEY_WRITE,
@@ -351,21 +373,28 @@ bool SetCascAssociation(const std::wstring& launcher) {
     RegSetValueExW(cmd, nullptr, 0, REG_SZ, (const BYTE*)openCmd, (DWORD)((wcslen(openCmd) + 1) * 2));
     RegCloseKey(cmd);
 
+    HKEY openWith = nullptr;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\Classes\\.casc\\OpenWithProgids",
+                        0, nullptr, 0, KEY_WRITE, nullptr, &openWith, nullptr) == ERROR_SUCCESS) {
+        RegSetValueExW(openWith, progId, 0, REG_NONE, nullptr, 0);
+        RegCloseKey(openWith);
+    }
+
     SHChangeNotify(SHCNE_ASSOCCHANGED, 0, nullptr, nullptr);
     return true;
 }
 
-void RestoreSpmAssociation() {
+void RestoreCascAssociation() {
     HKEY bk = nullptr;
     if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\CascadeurChineseLocalizer\\AssocBackup",
                       0, KEY_READ, &bk) == ERROR_SUCCESS) {
         DWORD hadDefault = 0; DWORD hsz = sizeof(hadDefault);
-        if (RegQueryValueExW(bk, L"spm_had_default", nullptr, nullptr,
+        if (RegQueryValueExW(bk, L"casc_had_default", nullptr, nullptr,
                              (BYTE*)&hadDefault, &hsz) == ERROR_SUCCESS && hadDefault != 0) {
             // A user-level .casc default existed before we installed -> restore it.
             wchar_t cur[512] = {};
             DWORD cb = sizeof(cur);
-            if (RegQueryValueExW(bk, L"spm_default", nullptr, nullptr,
+            if (RegQueryValueExW(bk, L"casc_default", nullptr, nullptr,
                                  (BYTE*)cur, &cb) == ERROR_SUCCESS) {
                 HKEY hk = nullptr;
                 if (RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\Classes\\.casc", 0, nullptr,
@@ -396,6 +425,7 @@ void RestoreSpmAssociation() {
     }
     // Remove the launcher's "Applications" registration we created.
     RegDeleteTreeW(HKEY_CURRENT_USER, L"Software\\Classes\\Applications\\CascadeurChineseLauncher.exe");
+    RegDeleteTreeW(HKEY_CURRENT_USER, L"Software\\CascadeurChineseLocalizer\\AssocBackup");
     SHChangeNotify(SHCNE_ASSOCCHANGED, 0, nullptr, nullptr);
 }
 
@@ -545,7 +575,7 @@ bool Uninstall(InstallerState& st) {
     }
     if (!desktop.empty()) DeleteFileW((desktop + L"\\" + name).c_str());
     if (!programs.empty()) DeleteFileW((programs + L"\\" + name).c_str());
-    RestoreSpmAssociation();
+    RestoreCascAssociation();
     return true;
 }
 

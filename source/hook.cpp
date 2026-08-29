@@ -18,12 +18,21 @@
 #include <QtCore/QTextStream>
 #include <QtCore/QTimer>
 #include <QtGui/QGuiApplication>
+#include <QtGui/QFontMetrics>
 #include <QtGui/QKeyEvent>
 #include <QtGui/QTextLayout>
 #include <QtGui/QWindow>
+#include <QtQml/QQmlComponent>
+#include <QtQml/QQmlContext>
+#include <QtQml/QQmlEngine>
+#include <QtQml/qqml.h>
+#include <QtQuick/QQuickItem>
+#include <QtQuick/QQuickWindow>
 #include "detours/detours.h"
 #include <algorithm>
 #include <atomic>
+#include <cmath>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -47,6 +56,14 @@ using AddTextLayoutFn = void (__fastcall *)(
     const QColor&, const QColor&, const QColor&, const QColor&,
     int, int, int, int);
 AddTextLayoutFn g_originalAddTextLayout = nullptr;
+using FontAdvanceFn = int (__fastcall *)(const QFontMetrics*, const QString&, int);
+using FontAdvanceOptFn = int (__fastcall *)(const QFontMetrics*, const QString&, const QTextOption&);
+using FontAdvanceFFn = qreal (__fastcall *)(const QFontMetricsF*, const QString&, int);
+using FontAdvanceFOptFn = qreal (__fastcall *)(const QFontMetricsF*, const QString&, const QTextOption&);
+FontAdvanceFn g_fontAdvance = nullptr;
+FontAdvanceOptFn g_fontAdvanceOpt = nullptr;
+FontAdvanceFFn g_fontAdvanceF = nullptr;
+FontAdvanceFOptFn g_fontAdvanceFOpt = nullptr;
 
 std::wstring selfDirectory()
 {
@@ -136,6 +153,42 @@ QString translateText(const QString& raw)
     if (it != g_exact.end()) return QString::fromUtf8(it->second) + suffix;
     it = g_folded.find(normalize(key).toUtf8().toStdString());
     return it == g_folded.end() ? QString() : QString::fromUtf8(it->second) + suffix;
+}
+
+int __fastcall hookedFontAdvance(const QFontMetrics* metrics, const QString& text, int length)
+{
+    const QString translated = translateText(text);
+    if (translated.isEmpty()) return g_fontAdvance(metrics, text, length);
+    if (length >= 0) length = std::min(length, int(translated.size()));
+    const int pad = std::max(0, g_fontAdvance(metrics, QStringLiteral("中"), -1));
+    return g_fontAdvance(metrics, translated, length) + pad;
+}
+
+int __fastcall hookedFontAdvanceOpt(const QFontMetrics* metrics, const QString& text,
+                                    const QTextOption& option)
+{
+    const QString translated = translateText(text);
+    if (translated.isEmpty()) return g_fontAdvanceOpt(metrics, text, option);
+    const int pad = std::max(0, g_fontAdvance(metrics, QStringLiteral("中"), -1));
+    return g_fontAdvanceOpt(metrics, translated, option) + pad;
+}
+
+qreal __fastcall hookedFontAdvanceF(const QFontMetricsF* metrics, const QString& text, int length)
+{
+    const QString translated = translateText(text);
+    if (translated.isEmpty()) return g_fontAdvanceF(metrics, text, length);
+    if (length >= 0) length = std::min(length, int(translated.size()));
+    const qreal pad = std::max<qreal>(0.0, g_fontAdvanceF(metrics, QStringLiteral("中"), -1));
+    return g_fontAdvanceF(metrics, translated, length) + pad;
+}
+
+qreal __fastcall hookedFontAdvanceFOpt(const QFontMetricsF* metrics, const QString& text,
+                                       const QTextOption& option)
+{
+    const QString translated = translateText(text);
+    if (translated.isEmpty()) return g_fontAdvanceFOpt(metrics, text, option);
+    const qreal pad = std::max<qreal>(0.0, g_fontAdvanceF(metrics, QStringLiteral("中"), -1));
+    return g_fontAdvanceFOpt(metrics, translated, option) + pad;
 }
 
 void recordUntranslated(const QString& text)
@@ -257,13 +310,18 @@ void dumpUntranslated()
     });
 }
 
+QQuickItem* g_mainMenuBar = nullptr;
+void adjustMenuWidths(QQuickItem* menuBar);
+
 class ShortcutFilter final : public QObject {
 public:
     bool eventFilter(QObject* watched, QEvent* event) override {
         if (event && event->type() == QEvent::KeyRelease) {
             auto* key = static_cast<QKeyEvent*>(event);
             if (!key->isAutoRepeat() && key->key() == Qt::Key_F3) {
-                g_enabled.store(!g_enabled.load()); repaintAll(); return true;
+                g_enabled.store(!g_enabled.load());
+                adjustMenuWidths(g_mainMenuBar);
+                repaintAll(); return true;
             }
             const bool tildeKey = key->key() == Qt::Key_AsciiTilde ||
                                   key->key() == Qt::Key_QuoteLeft;
@@ -276,13 +334,148 @@ public:
     }
 };
 ShortcutFilter* g_filter = nullptr;
+QObject* g_authorLink = nullptr;
+QObject* g_githubLink = nullptr;
+
+void adjustMenuWidths(QQuickItem* menuBar)
+{
+    if (!menuBar) return;
+    const int itemCount = menuBar->property("count").toInt();
+    for (int index = 0; index < itemCount; ++index) {
+        QQuickItem* item = nullptr;
+        if (!QMetaObject::invokeMethod(menuBar, "itemAt", Qt::DirectConnection,
+                                       Q_RETURN_ARG(QQuickItem*, item), Q_ARG(int, index)) || !item)
+            continue;
+        const QString source = item->property("text").toString();
+        if (source.isEmpty()) continue;
+        const char* originalName = "_cascadeurChineseOriginalImplicitWidth";
+        const char* originalWidthName = "_cascadeurChineseOriginalWidth";
+        if (!item->property(originalName).isValid())
+            item->setProperty(originalName, item->implicitWidth());
+        if (!item->property(originalWidthName).isValid())
+            item->setProperty(originalWidthName, item->width());
+        const QString translated = translateText(source);
+        if (!g_enabled.load() || translated.isEmpty()) {
+            item->setImplicitWidth(item->property(originalName).toReal());
+            item->setWidth(item->property(originalWidthName).toReal());
+            continue;
+        }
+        const QFont font = item->property("font").value<QFont>();
+        const QFontMetricsF metrics(font);
+        const qreal left = item->property("leftPadding").toReal();
+        const qreal right = item->property("rightPadding").toReal();
+        const qreal cjkSlack = metrics.horizontalAdvance(QStringLiteral("中")) * 0.5;
+        const qreal targetWidth = std::ceil(metrics.horizontalAdvance(translated) +
+                                            left + right + cjkSlack);
+        item->setImplicitWidth(targetWidth);
+        item->setWidth(targetWidth);
+    }
+}
+
+QObject* createMenuLink(QQuickItem* parent, QObject* helpObject,
+                        const QString& label, const QString& url,
+                        const QString& objectName)
+{
+    QQmlEngine* engine = qmlEngine(helpObject);
+    if (!engine || !parent) return nullptr;
+    const QByteArray qml = R"QML(
+import QtQuick 2.15
+import QtQuick.Controls 2.15
+MenuBarItem {
+    property string targetUrl
+    palette.buttonText: "#66aaff"
+    palette.windowText: "#66aaff"
+    palette.text: "#66aaff"
+    onClicked: Qt.openUrlExternally(targetUrl)
+}
+)QML";
+    QQmlComponent component(engine);
+    component.setData(qml, QUrl(QStringLiteral("cascadeur-chinese-author-link.qml")));
+    QQmlContext* context = qmlContext(helpObject);
+    QObject* object = component.create(context ? context : engine->rootContext());
+    auto* item = qobject_cast<QQuickItem*>(object);
+    if (!item) { delete object; return nullptr; }
+    object->setObjectName(objectName);
+    object->setProperty("text", label);
+    object->setProperty("targetUrl", url);
+    // Use the exact geometry/font metrics of Cascadeur's own Help item. The
+    // stock Controls fallback has a taller vertical padding, which otherwise
+    // puts the link text several pixels below the native menu baseline.
+    static const char* inheritedProperties[] = {
+        "font", "height", "padding", "topPadding", "bottomPadding",
+        "leftPadding", "rightPadding", "spacing", "topInset", "bottomInset"
+    };
+    for (const char* name : inheritedProperties) {
+        const QVariant value = helpObject->property(name);
+        if (value.isValid()) object->setProperty(name, value);
+    }
+    const bool added = QMetaObject::invokeMethod(parent, "addItem", Qt::DirectConnection,
+                                                 Q_ARG(QQuickItem*, item));
+    if (!added) { delete object; return nullptr; }
+    return object;
+}
+
+bool installAuthorLinks()
+{
+    if (g_authorLink && g_githubLink) return true;
+    for (QWindow* window : QGuiApplication::allWindows()) {
+        if (!window) continue;
+        QList<QObject*> objects = window->findChildren<QObject*>();
+        objects.prepend(window);
+        if (auto* quickWindow = qobject_cast<QQuickWindow*>(window)) {
+            if (QQuickItem* content = quickWindow->contentItem()) {
+                std::function<void(QQuickItem*)> appendVisualTree =
+                    [&](QQuickItem* item) {
+                        if (!item) return;
+                        objects.append(item);
+                        for (QQuickItem* child : item->childItems()) appendVisualTree(child);
+                    };
+                appendVisualTree(content);
+            }
+        }
+        for (QObject* object : objects) {
+            QString text = object->property("text").toString();
+            text.remove(QLatin1Char('&'));
+            if (text.trimmed().compare(QLatin1String("Help"), Qt::CaseInsensitive) != 0 &&
+                text.trimmed() != QStringLiteral("帮助")) continue;
+            auto* helpItem = qobject_cast<QQuickItem*>(object);
+            QQuickItem* parent = qobject_cast<QQuickItem*>(object->parent());
+            if (!parent) continue;
+            g_authorLink = createMenuLink(parent, object,
+                QStringLiteral("Bilibili神说要凑数汉化"),
+                QStringLiteral("https://space.bilibili.com/281243426?spm_id_from=333.1007.0.0"),
+                QStringLiteral("cascadeur_chinese_author"));
+            g_githubLink = createMenuLink(parent, object,
+                QStringLiteral("Github仓库"),
+                QStringLiteral("https://github.com/iillya/CascadeurChinese"),
+                QStringLiteral("cascadeur_chinese_github"));
+            g_mainMenuBar = parent;
+            adjustMenuWidths(parent);
+            QTimer::singleShot(0, parent, [parent] { adjustMenuWidths(parent); });
+            QTimer::singleShot(500, parent, [parent] { adjustMenuWidths(parent); });
+            QTimer::singleShot(2000, parent, [parent] { adjustMenuWidths(parent); });
+            return g_authorLink && g_githubLink;
+        }
+    }
+    return false;
+}
 
 void installEventFilterWhenReady()
 {
     for (int i = 0; i < 600; ++i) {
         if (QCoreApplication* app = QCoreApplication::instance()) {
             QMetaObject::invokeMethod(app, [app]() {
-                if (!g_filter) { g_filter = new ShortcutFilter; g_filter->moveToThread(app->thread()); app->installEventFilter(g_filter); }
+                if (!g_filter) {
+                    g_filter = new ShortcutFilter;
+                    g_filter->moveToThread(app->thread());
+                    app->installEventFilter(g_filter);
+                    auto* timer = new QTimer(app);
+                    QObject::connect(timer, &QTimer::timeout, timer, [timer]() {
+                        if (installAuthorLinks()) timer->stop();
+                    });
+                    timer->start(500);
+                    installAuthorLinks();
+                }
             }, Qt::QueuedConnection);
             return;
         }
@@ -297,12 +490,28 @@ bool installHook()
     if (!quick) return false;
     constexpr const char* symbol = "?addTextLayout@QQuickTextNode@@QEAAXAEBVQPointF@@PEAVQTextLayout@@AEBVQColor@@W4TextStyle@QQuickText@@2222HHHH@Z";
     g_originalAddTextLayout = reinterpret_cast<AddTextLayoutFn>(GetProcAddress(quick, symbol));
+    HMODULE gui = GetModuleHandleW(L"Qt6Gui.dll");
+    if (!gui) gui = LoadLibraryW(L"Qt6Gui.dll");
+    if (gui) {
+        g_fontAdvance = reinterpret_cast<FontAdvanceFn>(GetProcAddress(gui,
+            "?horizontalAdvance@QFontMetrics@@QEBAHAEBVQString@@H@Z"));
+        g_fontAdvanceOpt = reinterpret_cast<FontAdvanceOptFn>(GetProcAddress(gui,
+            "?horizontalAdvance@QFontMetrics@@QEBAHAEBVQString@@AEBVQTextOption@@@Z"));
+        g_fontAdvanceF = reinterpret_cast<FontAdvanceFFn>(GetProcAddress(gui,
+            "?horizontalAdvance@QFontMetricsF@@QEBANAEBVQString@@H@Z"));
+        g_fontAdvanceFOpt = reinterpret_cast<FontAdvanceFOptFn>(GetProcAddress(gui,
+            "?horizontalAdvance@QFontMetricsF@@QEBANAEBVQString@@AEBVQTextOption@@@Z"));
+    }
     if (!g_originalAddTextLayout || DetourTransactionBegin() != NO_ERROR) return false;
     if (DetourUpdateThread(GetCurrentThread()) != NO_ERROR ||
         DetourAttach(reinterpret_cast<PVOID*>(&g_originalAddTextLayout),
                      reinterpret_cast<PVOID>(hookedAddTextLayout)) != NO_ERROR) {
         DetourTransactionAbort(); return false;
     }
+    if (g_fontAdvance) DetourAttach(reinterpret_cast<PVOID*>(&g_fontAdvance), reinterpret_cast<PVOID>(hookedFontAdvance));
+    if (g_fontAdvanceOpt) DetourAttach(reinterpret_cast<PVOID*>(&g_fontAdvanceOpt), reinterpret_cast<PVOID>(hookedFontAdvanceOpt));
+    if (g_fontAdvanceF) DetourAttach(reinterpret_cast<PVOID*>(&g_fontAdvanceF), reinterpret_cast<PVOID>(hookedFontAdvanceF));
+    if (g_fontAdvanceFOpt) DetourAttach(reinterpret_cast<PVOID*>(&g_fontAdvanceFOpt), reinterpret_cast<PVOID>(hookedFontAdvanceFOpt));
     return DetourTransactionCommit() == NO_ERROR;
 }
 
@@ -311,6 +520,10 @@ void uninstallHook()
     if (!g_originalAddTextLayout || DetourTransactionBegin() != NO_ERROR) return;
     DetourUpdateThread(GetCurrentThread());
     DetourDetach(reinterpret_cast<PVOID*>(&g_originalAddTextLayout), reinterpret_cast<PVOID>(hookedAddTextLayout));
+    if (g_fontAdvance) DetourDetach(reinterpret_cast<PVOID*>(&g_fontAdvance), reinterpret_cast<PVOID>(hookedFontAdvance));
+    if (g_fontAdvanceOpt) DetourDetach(reinterpret_cast<PVOID*>(&g_fontAdvanceOpt), reinterpret_cast<PVOID>(hookedFontAdvanceOpt));
+    if (g_fontAdvanceF) DetourDetach(reinterpret_cast<PVOID*>(&g_fontAdvanceF), reinterpret_cast<PVOID>(hookedFontAdvanceF));
+    if (g_fontAdvanceFOpt) DetourDetach(reinterpret_cast<PVOID*>(&g_fontAdvanceFOpt), reinterpret_cast<PVOID>(hookedFontAdvanceFOpt));
     DetourTransactionCommit();
 }
 
