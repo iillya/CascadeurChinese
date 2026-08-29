@@ -47,3 +47,7 @@ drawtext_captured.txt
 
 # Full Qt source trees (bundled SDK headers/libs live in third_party\qt*sdk)
 third_party/qtbase-6.6.0/
+
+# Release artifacts under dist are versioned.
+!/dist/
+!/dist/**
