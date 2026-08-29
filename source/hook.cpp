@@ -5,6 +5,8 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+
+#include "hook_lifecycle.h"
 #include <shlobj.h>
 #include <QtCore/QCoreApplication>
 #include <QtCore/QDir>
@@ -312,10 +314,17 @@ void dumpUntranslated()
 
 QQuickItem* g_mainMenuBar = nullptr;
 void adjustMenuWidths(QQuickItem* menuBar);
+void scheduleAuthorLinksInstall();
 
 class ShortcutFilter final : public QObject {
 public:
     bool eventFilter(QObject* watched, QEvent* event) override {
+        // Phase 2: UI objects created after initial installation are handled by
+        // lifecycle events instead of a permanent polling timer.
+        if (event && (event->type() == QEvent::Show ||
+                      event->type() == QEvent::Polish ||
+                      event->type() == QEvent::ChildAdded))
+            scheduleAuthorLinksInstall();
         if (event && event->type() == QEvent::KeyRelease) {
             auto* key = static_cast<QKeyEvent*>(event);
             if (!key->isAutoRepeat() && key->key() == Qt::Key_F3) {
@@ -460,27 +469,44 @@ bool installAuthorLinks()
     return false;
 }
 
-void installEventFilterWhenReady()
-{
-    for (int i = 0; i < 600; ++i) {
-        if (QCoreApplication* app = QCoreApplication::instance()) {
-            QMetaObject::invokeMethod(app, [app]() {
-                if (!g_filter) {
-                    g_filter = new ShortcutFilter;
-                    g_filter->moveToThread(app->thread());
-                    app->installEventFilter(g_filter);
-                    auto* timer = new QTimer(app);
-                    QObject::connect(timer, &QTimer::timeout, timer, [timer]() {
-                        if (installAuthorLinks()) timer->stop();
-                    });
-                    timer->start(500);
-                    installAuthorLinks();
-                }
-            }, Qt::QueuedConnection);
-            return;
+void scheduleAuthorLinksInstall() {
+    static bool scheduled = false;
+    if (scheduled || (g_authorLink && g_githubLink)) return;
+    scheduled = true;
+    QTimer::singleShot(0, QCoreApplication::instance(), [] {
+        scheduled = false;
+        installAuthorLinks();
+    });
+}
+
+void installLifecycleFilter(QCoreApplication* app) {
+    if (!app || g_filter) return;
+    g_filter = new ShortcutFilter;
+    g_filter->moveToThread(app->thread());
+    app->installEventFilter(g_filter);
+    installAuthorLinks();
+
+    // Phase 3: optional bounded fallback for UI that appears without a useful
+    // Qt lifecycle event. Disabled by default; implementation is retained.
+    if (!CascadeurHookLifecycle::kEnableDeferredPolling)
+        return;
+    auto* timer = new QTimer(app);
+    timer->setInterval(CascadeurHookLifecycle::kDeferredScanIntervalMs);
+    QObject::connect(timer, &QTimer::timeout, timer, [timer] {
+        if (installAuthorLinks()) {
+            timer->stop();
+            timer->deleteLater();
         }
-        Sleep(50);
-    }
+    });
+    timer->start();
+    const QPointer<QTimer> timerGuard(timer);
+    QTimer::singleShot(CascadeurHookLifecycle::kDeferredScanWindowMs, app,
+                       [timerGuard] {
+                           if (timerGuard) {
+                               timerGuard->stop();
+                               timerGuard->deleteLater();
+                           }
+                       });
 }
 
 bool installHook()
@@ -527,10 +553,25 @@ void uninstallHook()
     DetourTransactionCommit();
 }
 
+void runOnGuiThread(QCoreApplication* app) {
+    // Phase 1: the Qt application exists and this runs on its GUI thread.
+    loadDictionaries();
+    if (installHook())
+        installLifecycleFilter(app);
+}
+
 DWORD WINAPI initialize(void*)
 {
-    loadDictionaries();
-    if (installHook()) installEventFilterWhenReady();
+    QCoreApplication* app = nullptr;
+    for (int attempt = 0;
+         attempt < CascadeurHookLifecycle::kApplicationWaitAttempts; ++attempt) {
+        app = QCoreApplication::instance();
+        if (app) break;
+        Sleep(CascadeurHookLifecycle::kApplicationWaitIntervalMs);
+    }
+    if (!app) return 1;
+    QMetaObject::invokeMethod(app, [app] { runOnGuiThread(app); },
+                              Qt::QueuedConnection);
     return 0;
 }
 } // namespace
