@@ -83,6 +83,25 @@ LPTHREAD_START_ROUTINE ResolveLoadLibrary(DWORD pid) {
     return reinterpret_cast<LPTHREAD_START_ROUTINE>(fn);
 }
 
+bool IsAmd64Image(const std::wstring& path) {
+    HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ,
+                              nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) return false;
+    IMAGE_DOS_HEADER dos{};
+    DWORD read = 0;
+    bool ok = ReadFile(file, &dos, sizeof(dos), &read, nullptr) &&
+              read == sizeof(dos) && dos.e_magic == IMAGE_DOS_SIGNATURE &&
+              SetFilePointer(file, dos.e_lfanew, nullptr, FILE_BEGIN) != INVALID_SET_FILE_POINTER;
+    DWORD signature = 0;
+    IMAGE_FILE_HEADER header{};
+    if (ok) ok = ReadFile(file, &signature, sizeof(signature), &read, nullptr) &&
+                 read == sizeof(signature) && signature == IMAGE_NT_SIGNATURE &&
+                 ReadFile(file, &header, sizeof(header), &read, nullptr) &&
+                 read == sizeof(header) && header.Machine == IMAGE_FILE_MACHINE_AMD64;
+    CloseHandle(file);
+    return ok;
+}
+
 } // namespace
 
 int APIENTRY wWinMain(HINSTANCE, HINSTANCE, PWSTR cmdLine, int) {
@@ -97,6 +116,13 @@ int APIENTRY wWinMain(HINSTANCE, HINSTANCE, PWSTR cmdLine, int) {
         MessageBoxW(nullptr,
                     L"找不到 cascadeur.exe 或汉化 DLL。\n"
                     L"请重新运行安装程序，修复 ChineseLauncher 目录。",
+                    L"Cascadeur 中文补丁", MB_OK | MB_ICONERROR);
+        return 1;
+    }
+    if (!IsAmd64Image(exePath) || !IsAmd64Image(dllPath) ||
+        !IsFile(root + L"\\Qt6Core.dll") || IsFile(root + L"\\Qt5Core.dll")) {
+        MessageBoxW(nullptr,
+                    L"目标程序、汉化 DLL 架构不一致，或目标不是受支持的 Qt 6 版本。",
                     L"Cascadeur 中文补丁", MB_OK | MB_ICONERROR);
         return 1;
     }

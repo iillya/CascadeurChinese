@@ -28,7 +28,7 @@ Cascadeur 的简体中文显示层汉化。当前基线为 **Cascadeur 2026.1.2�
 
 ## 构建
 
-准备 Visual Studio 2022 C++ 工具链，以及 Qt 6.5.3 MSVC x64 开发文件。项目优先使用同级 `_ThirdParty\qt6sdk`，也可放到仓库的 `third_party\qt6sdk`。随后运行 `source\build.bat`。
+准备 Visual Studio 2022 C++ 工具链，以及 Qt 6.5.3 MSVC 2019 x64 开发文件。项目优先使用工作区统一目录 `_ThirdParty\Qt\6.5.3\msvc2019_64`，也可放到仓库的 `third_party\qt6sdk`。随后运行 `source\build.bat`。
 
 产物位于 `build\out`，最终安装包位于 `dist`。
 
@@ -42,4 +42,6 @@ Cascadeur 的简体中文显示层汉化。当前基线为 **Cascadeur 2026.1.2�
 
 ## 项目
 
-Cascadeur 主窗口顶部 `Help` 右侧提供 [Bilibili神说要凑数汉化](https://space.bilibili.com/281243426?spm_id_from=333.1007.0.0) 与 [Github仓库](https://github.com/iillya/CascadeurChinese) 两个可点击署名链接。
+Cascadeur 主窗口顶部 `Help` 右侧依次提供“中/英”、[Bilibili神说要凑数汉化](https://space.bilibili.com/281243426?spm_id_from=333.1007.0.0) 与 [GitHub 仓库](https://github.com/iillya/CascadeurChinese)。作者和仓库链接使用蓝色文字及手形光标。
+
+只读兼容性与窗口信息写入临时目录的 `Cascadeur_window_diagnostics.json`；该诊断不调用 `winId()`，也不修改窗口状态。
