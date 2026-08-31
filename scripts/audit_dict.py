@@ -6,7 +6,6 @@ import os
 import re
 import sys
 
-sys.stdout.reconfigure(encoding="utf-8")
 MAIN = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                     "translations", "dictionary_zh.json")
 
@@ -33,7 +32,10 @@ def upper_leftover(v):
 
 
 def main():
-    d = json.load(open(MAIN, encoding="utf-8"))["translations"]
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+    with open(MAIN, encoding="utf-8") as source:
+        d = json.load(source)["translations"]
     issues = {}
     issues["no-cjk"] = [k for k, v in d.items() if not cjk(v)]
     issues["value==key"] = [k for k, v in d.items() if v.strip() == k]

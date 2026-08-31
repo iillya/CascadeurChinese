@@ -1,3 +1,6 @@
+"""Prepare review candidates; never rewrite the formal dictionary automatically."""
+
+import argparse
 import concurrent.futures
 import json
 import pathlib
@@ -69,12 +72,21 @@ def translate(text: str) -> str:
 
 
 def main() -> None:
-    capture = json.loads(CAPTURE.read_text(encoding="utf-8"))["translations"]
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--capture", type=pathlib.Path, default=CAPTURE)
+    parser.add_argument("--output", type=pathlib.Path,
+                        default=ROOT / "build" / "capture_review.json")
+    parser.add_argument("--machine-translate", action="store_true",
+                        help="Explicitly allow sending candidate text to Google Translate")
+    args = parser.parse_args()
+    if args.output.resolve() == DICTIONARY.resolve():
+        parser.error("review output must not overwrite the formal dictionary")
+    capture = json.loads(args.capture.read_text(encoding="utf-8"))["translations"]
     document = json.loads(DICTIONARY.read_text(encoding="utf-8"))
     formal = document["translations"]
 
     reused = {}
-    for path in WORKSPACE.rglob("*_zh.json"):
+    for path in sorted(WORKSPACE.glob("*/translations/dictionary_zh.json")):
         if path == DICTIONARY:
             continue
         try:
@@ -82,24 +94,34 @@ def main() -> None:
         except Exception:
             continue
         for key, value in translations.items():
-            if key in capture and key not in formal and eligible(key) and value and value != key:
+            if (key in capture and key not in formal and eligible(key) and
+                isinstance(value, str) and value and value != key):
                 reused.setdefault(key, value)
 
     pending = [key for key in capture if key not in formal and key not in reused and eligible(key)]
     generated = {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=12) as executor:
-        futures = {executor.submit(translate, key): key for key in pending}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+        futures = {executor.submit(translate, key): key for key in pending} if args.machine_translate else {}
         for future in concurrent.futures.as_completed(futures):
             key = futures[future]
             value = future.result()
             if value and value != key and "�" not in value:
                 generated[key] = value
 
-    formal.update(reused)
-    formal.update(generated)
-    document["translations"] = dict(sorted(formal.items(), key=lambda item: item[0].casefold()))
-    DICTIONARY.write_text(json.dumps(document, ensure_ascii=False, indent=2) + "\n",
-                          encoding="utf-8")
+    candidates = {key: reused.get(key, generated.get(key, ""))
+                  for key in capture if key not in formal and eligible(key)}
+    if args.output.exists():
+        # Fail on malformed existing JSON; never discard hand-reviewed values.
+        previous = json.loads(args.output.read_text(encoding="utf-8"))["translations"]
+        for key, value in previous.items():
+            if isinstance(value, str) and value:
+                candidates[key] = value
+    review = {"id": "cascadeur-review-only", "language": "zh-CN",
+              "translations": dict(sorted(candidates.items(), key=lambda item: (item[0].casefold(), item[0])))}
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    temporary = args.output.with_suffix(args.output.suffix + ".tmp")
+    temporary.write_text(json.dumps(review, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    temporary.replace(args.output)
     print(json.dumps({
         "captured": len(capture), "eligible": len(pending) + len(reused),
         "reused": len(reused), "translated": len(generated),

@@ -3,24 +3,24 @@ Cascadeur 中文显示层补丁
 适用基线：Cascadeur 2026.1.2（Qt 6.5.3）
 
 安装：
-1. 运行 CascadeurChineseSetup.exe。
+1. 运行 CascadeurChineseInstaller.exe，按提示允许管理员权限。
 2. 选择包含 cascadeur.exe 的目录，通常是：
    C:\Program Files\Cascadeur
 3. 点击“安装”，以后从“Cascadeur 中文版”快捷方式启动。
-4. 安装后可直接双击 .casc 工程，通过中文版启动器打开。
+4. 工程关联选项仅接管已验证的打开命令，不强制更改 Windows 默认应用。
 
 快捷键：
-F3              临时切换中文/英文显示
+F3              切换中文/英文显示；右键“中/英”可修改按键，点击“确定”后持久化
 Shift + ~       增量嗅探未翻译词条到桌面（不覆盖已填写译文）
 
 卸载：
-再次运行安装程序并点击“卸载”。
-卸载会移除中文版 .casc 关联，并恢复安装前的 Cascadeur 打开方式。
+保存工程并退出软件，在 Windows“已安装的应用”中卸载“Cascadeur 中文补丁”。
+仅恢复仍属于补丁的打开命令，保留后来的外部修改、用户词典和恢复备份。
 
 安全边界：
 补丁文件只放在 ChineseLauncher 子目录。汉化只替换最终绘制用的临时文字布局，
 不会修改 Cascadeur 的 QML 属性、场景数据、命令参数、.casc 文件或原程序文件。
 
-作者：Bilibili神说要凑数汉化
+作者：Bilibili 神说要凑数汉化
 https://space.bilibili.com/281243426?spm_id_from=333.1007.0.0
 源码：https://github.com/iillya/CascadeurChinese

@@ -1,0 +1,7 @@
+{
+  "description": "Explicitly reviewed display-only numeric templates. Translations come from the formal dictionary.",
+  "sources": [
+    "Number of selected objects: %1",
+    "Collision cleaning completed from %1 to %2 frames"
+  ]
+}

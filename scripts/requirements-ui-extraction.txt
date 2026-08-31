@@ -1,0 +1,2 @@
+# Optional for zstd-compressed Qt resources; zlib uses Python's standard library.
+zstandard==0.25.0

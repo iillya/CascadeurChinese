@@ -1,0 +1,37 @@
+{
+  "product": "Cascadeur",
+  "exe": "cascadeur.exe",
+  "default": "Cascadeur",
+  "icon": "cascadeur.ico",
+  "qt": [
+    [6, 5, 1],
+    [
+      6,
+      5,
+      3
+    ]
+  ],
+  "modules": [
+    "Core",
+    "Gui",
+    "Qml",
+    "Quick"
+  ],
+  "handlers": [
+    "Cascadeur.scene",
+    "Applications\\cascadeur.exe"
+  ],
+  "extensions": [
+    ".casc"
+  ],
+  "legacy": [
+    "CascadeurChinese.casc"
+  ],
+  "payload": {
+    "CascadeurChineseHook.dll": "build/out/CascadeurChineseHook.dll",
+    "CascadeurChineseLauncher.exe": "build/out/CascadeurChineseLauncher.exe",
+    "translations/dictionary_zh.json": "translations/dictionary_zh.json",
+    "translations/numeric_templates.json": "translations/numeric_templates.json"
+  },
+  "id": "CascadeurChinese"
+}

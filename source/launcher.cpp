@@ -13,8 +13,24 @@
 #include <tlhelp32.h>
 #include <string>
 #include <vector>
+#include "qt_compatibility.h"
 
 namespace {
+
+bool RemoteModuleLoaded(DWORD pid, const std::wstring& path) {
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid);
+    if (snapshot == INVALID_HANDLE_VALUE) return false;
+    MODULEENTRY32W entry{};
+    entry.dwSize = sizeof(entry);
+    bool found = false;
+    if (Module32FirstW(snapshot, &entry)) {
+        do {
+            if (_wcsicmp(entry.szExePath, path.c_str()) == 0) { found = true; break; }
+        } while (Module32NextW(snapshot, &entry));
+    }
+    CloseHandle(snapshot);
+    return found;
+}
 
 std::wstring ParentDir(const std::wstring& path) {
     size_t slash = path.find_last_of(L"\\/");
@@ -62,13 +78,23 @@ LPTHREAD_START_ROUTINE ResolveLoadLibrary(DWORD pid) {
     if (!local) return nullptr;
     FARPROC fn = GetProcAddress(local, "LoadLibraryW");
     if (!fn) return nullptr;
-    uintptr_t rva = (uintptr_t)fn - (uintptr_t)local;
+    // A forwarded export may live in KernelBase instead of kernel32. Resolve
+    // the module owning the actual address before calculating its RVA.
+    HMODULE owner = nullptr;
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                           GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           reinterpret_cast<LPCWSTR>(fn), &owner)) return nullptr;
+    wchar_t ownerPath[MAX_PATH] = {};
+    if (!GetModuleFileNameW(owner, ownerPath, MAX_PATH)) return nullptr;
+    const wchar_t* ownerName = wcsrchr(ownerPath, L'\\');
+    ownerName = ownerName ? ownerName + 1 : ownerPath;
+    uintptr_t rva = (uintptr_t)fn - (uintptr_t)owner;
     HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid);
     if (snap != INVALID_HANDLE_VALUE) {
         MODULEENTRY32W mod{}; mod.dwSize = sizeof(mod);
         if (Module32FirstW(snap, &mod)) {
             do {
-                if (_wcsicmp(mod.szModule, L"kernel32.dll") == 0) {
+                if (_wcsicmp(mod.szModule, ownerName) == 0) {
                     CloseHandle(snap);
                     return (LPTHREAD_START_ROUTINE)((uintptr_t)mod.modBaseAddr + rva);
                 }
@@ -90,7 +116,7 @@ bool IsAmd64Image(const std::wstring& path) {
     IMAGE_DOS_HEADER dos{};
     DWORD read = 0;
     bool ok = ReadFile(file, &dos, sizeof(dos), &read, nullptr) &&
-              read == sizeof(dos) && dos.e_magic == IMAGE_DOS_SIGNATURE &&
+              read == sizeof(dos) && dos.e_magic == IMAGE_DOS_SIGNATURE && dos.e_lfanew >= sizeof(dos) &&
               SetFilePointer(file, dos.e_lfanew, nullptr, FILE_BEGIN) != INVALID_SET_FILE_POINTER;
     DWORD signature = 0;
     IMAGE_FILE_HEADER header{};
@@ -104,7 +130,7 @@ bool IsAmd64Image(const std::wstring& path) {
 
 } // namespace
 
-int APIENTRY wWinMain(HINSTANCE, HINSTANCE, PWSTR cmdLine, int) {
+int APIENTRY wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ PWSTR cmdLine, _In_ int) {
     const std::wstring own = ExePath();
     const std::wstring dir = ParentDir(own);
     const std::wstring root = FindCascadeurRoot(dir);
@@ -120,9 +146,11 @@ int APIENTRY wWinMain(HINSTANCE, HINSTANCE, PWSTR cmdLine, int) {
         return 1;
     }
     if (!IsAmd64Image(exePath) || !IsAmd64Image(dllPath) ||
-        !IsFile(root + L"\\Qt6Core.dll") || IsFile(root + L"\\Qt5Core.dll")) {
+        !CascadeurQtCompatibility::supportedDirectory(root) ||
+        !IsAmd64Image(root + L"\\Qt6Core.dll") || !IsAmd64Image(root + L"\\Qt6Gui.dll") ||
+        !IsAmd64Image(root + L"\\Qt6Qml.dll") || !IsAmd64Image(root + L"\\Qt6Quick.dll")) {
         MessageBoxW(nullptr,
-                    L"目标程序、汉化 DLL 架构不一致，或目标不是受支持的 Qt 6 版本。",
+                    L"目标程序或 Qt 组件不兼容。支持 Qt 6.5.1、6.5.3 x64，且各组件须为同一版本。",
                     L"Cascadeur 中文补丁", MB_OK | MB_ICONERROR);
         return 1;
     }
@@ -161,7 +189,7 @@ int APIENTRY wWinMain(HINSTANCE, HINSTANCE, PWSTR cmdLine, int) {
         DWORD loadResult = 0;
         const bool loaded = wait == WAIT_OBJECT_0 &&
                             GetExitCodeThread(thread, &loadResult) &&
-                            loadResult != 0;
+                            loadResult != 0 && RemoteModuleLoaded(pi.dwProcessId, dllPath);
         CloseHandle(thread);
         ok = loaded;
     }
@@ -172,7 +200,7 @@ int APIENTRY wWinMain(HINSTANCE, HINSTANCE, PWSTR cmdLine, int) {
         ok = false;
         TerminateProcess(pi.hProcess, 3);
         WaitForSingleObject(pi.hProcess, 5000);
-        MessageBoxW(nullptr, L"汉化注入失败，已终止 Cascadeur（原文件未受影响）。",
+        MessageBoxW(nullptr, L"汉化加载失败，已取消本次 Cascadeur 启动。原程序文件未修改。",
                     L"Cascadeur 中文补丁", MB_OK | MB_ICONERROR);
     }
 
