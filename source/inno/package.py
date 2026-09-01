@@ -43,18 +43,13 @@ def payload_entries():
 
 
 def includes(entries):
-    files, code = [], [f'SetArrayLength(PayloadNames, {len(entries)});', f'SetArrayLength(PayloadHashes, {len(entries)});']
+    files, code = [], [f'SetArrayLength(PayloadNames, {len(entries)});']
     for index, (name, source, digest) in enumerate(entries):
         parent, filename = name.rsplit('\\', 1) if '\\' in name else ('', name)
         target = '{app}\\ChineseLauncher' + ('\\' + parent if parent else '')
-        flags, check = 'ignoreversion', ''
-        if parent == 'translations' or name in ('dictionary_zh.json', 'settings.ini'):
-            flags += ' uninsneveruninstall'
-            check = f'; Check: ShouldInstallDictionary({pascal_string(name)}, {pascal_string(digest)})'
-            files.append(f'Source: "{iss_string(source)}"; DestDir: "{{app}}\\ChineseLauncher\\.inno\\defaults"; '
-                         f'DestName: "{iss_string(filename)}"; Flags: ignoreversion')
-        files.append(f'Source: "{iss_string(source)}"; DestDir: "{target}"; DestName: "{iss_string(filename)}"; Flags: {flags}{check}')
-        code += [f'PayloadNames[{index}] := {pascal_string(name)};', f'PayloadHashes[{index}] := {pascal_string(digest)};']
+        files.append(f'Source: "{iss_string(source)}"; DestDir: "{target}"; '
+                     f'DestName: "{iss_string(filename)}"; Flags: ignoreversion')
+        code.append(f'PayloadNames[{index}] := {pascal_string(name)};')
     return '\n'.join(files) + '\n', '\n'.join(code) + '\n'
 
 

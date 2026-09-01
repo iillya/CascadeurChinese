@@ -96,17 +96,6 @@ const DictionarySnapshot& currentDictionary()
     return *snapshot;
 }
 QStringList g_dictionaryNotes;
-// Fixed diagnostic samples, not an untranslated-text capture. Rendering only
-// updates atomic fields; JSON is written later on the GUI thread.
-struct MenuPaintProbe {
-    const char* source;
-    std::atomic_int requestedLines{-2};
-    std::atomic_int layoutLines{0};
-    std::atomic_bool translated{false};
-};
-MenuPaintProbe g_menuPaintProbes[] = {{"File"}, {"Commands"}, {"Synchronization"}};
-std::atomic_bool g_menuProbesActive{true};
-
 using AddTextLayoutFn = void (__fastcall *)(
     void*, const QPointF&, QTextLayout*, const QColor&, int,
     const QColor&, const QColor&, const QColor&, const QColor&,
@@ -151,6 +140,8 @@ using FontAdvanceFn = int (__fastcall *)(const QFontMetrics*, const QString&, in
 using FontAdvanceOptFn = int (__fastcall *)(const QFontMetrics*, const QString&, const QTextOption&);
 using FontAdvanceFFn = qreal (__fastcall *)(const QFontMetricsF*, const QString&, int);
 using FontAdvanceFOptFn = qreal (__fastcall *)(const QFontMetricsF*, const QString&, const QTextOption&);
+// MSVC x64 returns QString through a hidden result pointer (sret).
+static_assert(sizeof(void*) == 8, "CascadeurChinese hooks require MSVC x64");
 FontAdvanceFn g_fontAdvance = nullptr;
 FontAdvanceOptFn g_fontAdvanceOpt = nullptr;
 FontAdvanceFFn g_fontAdvanceF = nullptr;
@@ -317,6 +308,13 @@ std::unique_ptr<QTextLayout> makeDisplayLayout(const QTextLayout* source, const 
     auto result = std::make_unique<QTextLayout>(text, source->font());
     result->setTextOption(source->textOption());
     result->setCacheEnabled(source->cacheEnabled());
+    const QList<QTextLayout::FormatRange> sourceFormats = source->formats();
+    if (sourceFormats.size() == 1) {
+        QTextLayout::FormatRange displayFormat = sourceFormats.constFirst();
+        displayFormat.start = 0;
+        displayFormat.length = text.size();
+        result->setFormats({displayFormat});
+    }
     result->beginLayout();
     const int sourceLines = std::max(1, source->lineCount());
     for (int i = 0; i < sourceLines; ++i) {
@@ -338,6 +336,19 @@ std::unique_ptr<QTextLayout> makeDisplayLayout(const QTextLayout* source, const 
     return result;
 }
 
+bool hasUnsafeTextFormats(const QTextLayout* layout)
+{
+    if (!layout) return true;
+    const QList<QTextLayout::FormatRange> formats = layout->formats();
+    if (formats.isEmpty()) return false;
+    // A single range covering the complete source is a uniform visual style
+    // (commonly Cascadeur's disabled/grey property labels). It can be safely
+    // remapped to the complete translated string. Partial or mixed rich text
+    // has character-dependent semantics and remains untouched.
+    return formats.size() != 1 || formats.constFirst().start != 0 ||
+           formats.constFirst().length < layout->text().size();
+}
+
 void __fastcall hookedAddTextLayout(
     void* node, const QPointF& position, QTextLayout* layout, const QColor& color,
     int style, const QColor& styleColor, const QColor& anchorColor,
@@ -353,27 +364,18 @@ void __fastcall hookedAddTextLayout(
             selectionEnd, lineStart, lineCount);
         return;
     }
-    MenuPaintProbe* probe = nullptr;
-    if (layout && g_menuProbesActive.load(std::memory_order_relaxed)) {
-        for (auto& candidate : g_menuPaintProbes) {
-            if (layout->text() == QLatin1String(candidate.source)) {
-                probe = &candidate;
-                probe->requestedLines.store(lineCount, std::memory_order_relaxed);
-                probe->layoutLines.store(layout->lineCount(), std::memory_order_relaxed);
-                probe->translated.store(false, std::memory_order_relaxed);
-                break;
-            }
-        }
-    }
     // Selection/format ranges refer to the original characters; there is no
     // safe one-to-one mapping to a translated layout. Preserve them verbatim.
     // QQuickText passes 0, unelidedLineCount even for an ordinary complete
     // single-line label. Only an actual subrange is unsafe to remap.
     const bool wholeLayout = layout && lineStart == 0 &&
         (lineCount == -1 || lineCount == layout->lineCount());
-    if (!layout || selectionStart != -1 || selectionEnd != -1 ||
-        !wholeLayout || !layout->formats().isEmpty() ||
-        !layout->preeditAreaText().isEmpty() || preserveTextNode(node)) {
+    const bool selected = selectionStart != -1 || selectionEnd != -1;
+    const bool unsafeFormats = layout && hasUnsafeTextFormats(layout);
+    const bool preedit = layout && !layout->preeditAreaText().isEmpty();
+    const bool alreadyElided = layout && layout->text().contains(QChar(0x2026));
+    if (!layout || selected || !wholeLayout || unsafeFormats || preedit || alreadyElided ||
+        preserveTextNode(node)) {
         g_originalAddTextLayout(node, position, layout, color, style, styleColor,
             anchorColor, selectionColor, selectedTextColor, selectionStart,
             selectionEnd, lineStart, lineCount);
@@ -385,7 +387,6 @@ void __fastcall hookedAddTextLayout(
         if (!replacement.isEmpty()) {
             auto display = makeDisplayLayout(layout, replacement);
             if (display && display->lineCount() > 0) {
-                if (probe) probe->translated.store(true, std::memory_order_relaxed);
                 g_originalAddTextLayout(node, position, display.get(), color, style,
                     styleColor, anchorColor, selectionColor, selectedTextColor,
                     selectionStart, selectionEnd, lineStart,
@@ -527,6 +528,63 @@ QPointer<QObject> g_authorLink;
 QPointer<QObject> g_githubLink;
 void adjustMenuWidths(QQuickItem* menuBar);
 void scheduleAuthorLinksInstall();
+
+bool isToolTipObject(const QObject* object)
+{
+    if (!object) return false;
+    const QString className = QString::fromLatin1(object->metaObject()->className());
+    return className.contains(QStringLiteral("tooltip"), Qt::CaseInsensitive) ||
+           object->objectName().contains(QStringLiteral("tooltip"), Qt::CaseInsensitive);
+}
+
+void adjustToolTipWidth(QObject* candidate)
+{
+    // Qt Quick ToolTip measures the untouched English `text` property before
+    // the scene-graph hook substitutes Chinese glyphs. Resize only the tooltip
+    // control itself; its source text and every application data property stay
+    // unchanged.
+    QObject* object = candidate;
+    QObject* control = nullptr;
+    for (int depth = 0; object && depth < 12; ++depth, object = object->parent()) {
+        if (isToolTipObject(object) && !object->property("text").toString().isEmpty() &&
+            object->property("width").isValid()) {
+            control = object;
+            break;
+        }
+    }
+    if (!control || control->property("_cascadeurChineseTooltipAdjusting").toBool()) return;
+
+    const QString source = control->property("text").toString();
+    if (source.isEmpty()) return;
+    const QString translated = translateText(source, true);
+    const QString display = g_enabled.load(std::memory_order_acquire) && !translated.isEmpty()
+        ? translated : source;
+
+    control->setProperty("_cascadeurChineseTooltipAdjusting", true);
+    QFont font = control->property("font").value<QFont>();
+    QObject* content = control->property("contentItem").value<QObject*>();
+    if (font.family().isEmpty() && content) font = content->property("font").value<QFont>();
+    DisplayHookGuard guard;
+    const QFontMetricsF metrics(font);
+    const qreal leftPadding = std::max<qreal>(0.0, control->property("leftPadding").toReal());
+    const QRectF ink = metrics.tightBoundingRect(display);
+    const qreal advance = metrics.horizontalAdvance(display);
+    const qreal inkLeft = std::max<qreal>(0.0, ink.left());
+    const qreal visualLeftGap = leftPadding + inkLeft;
+    const qreal inkRight = std::max<qreal>(advance, ink.right() + 1.0);
+    // Size from the actual glyph ink edge, not only horizontalAdvance(), so
+    // the visible gap after the final glyph equals the visible gap before it.
+    const qreal extraSpace = metrics.horizontalAdvance(QLatin1Char(' '));
+    const qreal target = std::ceil(leftPadding + inkRight + visualLeftGap + extraSpace);
+    if (target > 0.0) {
+        if (std::abs(control->property("width").toReal() - target) >= 0.5)
+            control->setProperty("width", target);
+        if (auto* item = qobject_cast<QQuickItem*>(control);
+            item && std::abs(item->implicitWidth() - target) >= 0.5)
+            item->setImplicitWidth(target);
+    }
+    control->setProperty("_cascadeurChineseTooltipAdjusting", false);
+}
 
 void toggleTranslation()
 {
@@ -699,8 +757,10 @@ public:
                       event->type() == QEvent::Polish ||
                       event->type() == QEvent::ActionAdded ||
                       event->type() == QEvent::LayoutRequest ||
-                      event->type() == QEvent::ChildAdded))
+                      event->type() == QEvent::ChildAdded)) {
             scheduleAuthorLinksInstall();
+            adjustToolTipWidth(watched);
+        }
         return QObject::eventFilter(watched, event);
     }
 };
@@ -974,69 +1034,6 @@ void installLifecycleFilter(QCoreApplication* app) {
                        });
 }
 
-void writeWindowDiagnostics()
-{
-    QJsonArray windows;
-    for (QWindow* window : QGuiApplication::allWindows()) {
-        if (!window) continue;
-        QJsonObject item;
-        item.insert(QStringLiteral("class"),
-                    QString::fromLatin1(window->metaObject()->className()));
-        item.insert(QStringLiteral("objectName"), window->objectName());
-        item.insert(QStringLiteral("title"), window->title());
-        item.insert(QStringLiteral("width"), window->width());
-        item.insert(QStringLiteral("height"), window->height());
-        item.insert(QStringLiteral("devicePixelRatio"), window->devicePixelRatio());
-        item.insert(QStringLiteral("visible"), window->isVisible());
-        item.insert(QStringLiteral("surfaceType"), int(window->surfaceType()));
-        windows.append(item);
-    }
-    QJsonObject capabilities;
-    capabilities.insert(QStringLiteral("SceneNameProtection"),
-        g_textNodeTrackingReady.load(std::memory_order_acquire)
-            ? QStringLiteral("OK") : QStringLiteral("FAILED"));
-    {
-        std::lock_guard<std::mutex> lock(g_textNodeMutex);
-        int protectedNodes = 0;
-        for (const auto& entry : g_textNodePreserve) if (entry.second) ++protectedNodes;
-        capabilities.insert(QStringLiteral("ProtectedTextNodes"), protectedNodes);
-        capabilities.insert(QStringLiteral("TrackedTextNodes"), int(g_textNodePreserve.size()));
-    }
-    capabilities.insert(QStringLiteral("Dictionary"),
-        std::atomic_load_explicit(&g_dictionary, std::memory_order_acquire)->exact.empty()
-            ? QStringLiteral("FAILED") : QStringLiteral("OK"));
-    capabilities.insert(QStringLiteral("TextLayoutHook"),
-        g_originalAddTextLayout ? QStringLiteral("OK") : QStringLiteral("DISABLED"));
-    capabilities.insert(QStringLiteral("FontMetricsHook"),
-        g_fontAdvance || g_fontAdvanceOpt ? QStringLiteral("PARTIAL") : QStringLiteral("DISABLED"));
-    capabilities.insert(QStringLiteral("FontMetricsFHook"),
-        g_fontAdvanceF || g_fontAdvanceFOpt ? QStringLiteral("PARTIAL") : QStringLiteral("DISABLED"));
-    QJsonObject root;
-    root.insert(QStringLiteral("product"), QStringLiteral("Cascadeur"));
-    root.insert(QStringLiteral("qtVersion"), QString::fromLatin1(qVersion()));
-    root.insert(QStringLiteral("engineVersion"), QStringLiteral("0.2.1"));
-    root.insert(QStringLiteral("translationEnabled"), g_enabled.load(std::memory_order_acquire));
-    QJsonArray menuPaint;
-    for (const auto& probe : g_menuPaintProbes) {
-        menuPaint.append(QJsonObject{
-            {QStringLiteral("source"), QString::fromLatin1(probe.source)},
-            {QStringLiteral("requestedLines"), probe.requestedLines.load(std::memory_order_relaxed)},
-            {QStringLiteral("layoutLines"), probe.layoutLines.load(std::memory_order_relaxed)},
-            {QStringLiteral("translated"), probe.translated.load(std::memory_order_relaxed)}
-        });
-    }
-    root.insert(QStringLiteral("menuPaint"), menuPaint);
-    root.insert(QStringLiteral("capabilities"), capabilities);
-    root.insert(QStringLiteral("dictionaryNotes"), QJsonArray::fromStringList(g_dictionaryNotes));
-    root.insert(QStringLiteral("windows"), windows);
-    QSaveFile file(QDir::tempPath() +
-                   QLatin1String("/Cascadeur_window_diagnostics.json"));
-    if (file.open(QIODevice::WriteOnly)) {
-        file.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
-        file.commit();
-    }
-}
-
 bool isExecutableAddress(const void* address)
 {
     if (!address) return false;
@@ -1145,9 +1142,6 @@ void runOnGuiThread(QCoreApplication* app) {
     if (installHook()) {
         installLifecycleFilter(app);
     }
-    QTimer::singleShot(2000, app, [] { writeWindowDiagnostics(); });
-    QTimer::singleShot(5000, app, [] { writeWindowDiagnostics(); });
-    QTimer::singleShot(5000, app, [] { g_menuProbesActive.store(false, std::memory_order_relaxed); });
 }
 
 DWORD WINAPI initialize(void*)

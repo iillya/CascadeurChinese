@@ -73,8 +73,8 @@ Source: "{#SupportDll}"; DestDir: "{app}\ChineseLauncher\.inno"; DestName: "supp
 
 [Icons]
 #ifndef TestMode
-Name: "{autodesktop}\Cascadeur 中文版"; Filename: "{app}\ChineseLauncher\CascadeurChineseLauncher.exe"; WorkingDir: "{app}"; Tasks: desktopicon
-Name: "{autoprograms}\Cascadeur 中文版"; Filename: "{app}\ChineseLauncher\CascadeurChineseLauncher.exe"; WorkingDir: "{app}"; Tasks: startmenuicon
+Name: "{autodesktop}\Cascadeur 中文版"; Filename: "{app}\ChineseLauncher\CascadeurChineseLauncher.exe"; WorkingDir: "{app}"; IconFilename: "{app}\ChineseLauncher\CascadeurChineseLauncher.exe"; IconIndex: 0; Tasks: desktopicon
+Name: "{autoprograms}\Cascadeur 中文版"; Filename: "{app}\ChineseLauncher\CascadeurChineseLauncher.exe"; WorkingDir: "{app}"; IconFilename: "{app}\ChineseLauncher\CascadeurChineseLauncher.exe"; IconIndex: 0; Tasks: startmenuicon
 #endif
 
 ; Associations are handled by the native, ownership-checked proxy journal.
@@ -85,7 +85,7 @@ var
   LegacySid: String;
   ProxySid: String;
   SettingsPath: String;
-  PayloadNames, PayloadHashes: TArrayOfString;
+  PayloadNames: TArrayOfString;
 
 function CheckTarget(Directory: String; CheckVersion: Boolean; Message: String; Capacity: Cardinal): Boolean;
 external 'CheckTarget@files:support.dll stdcall setuponly';
@@ -128,11 +128,6 @@ begin
   Result := '"' + InstallRoot + '\CascadeurChineseLauncher.exe" "%1"';
 end;
 
-function IsDictionary(Name: String): Boolean;
-begin
-  Result := (Pos('translations\', Name) = 1) or (Name = 'dictionary_zh.json') or (Name = 'settings.ini');
-end;
-
 function BufferText(Buffer: String): String;
 var
   Terminator: Integer;
@@ -140,21 +135,6 @@ begin
   Terminator := Pos(#0, Buffer);
   if Terminator > 0 then Result := Copy(Buffer, 1, Terminator - 1)
   else Result := Buffer;
-end;
-
-function ShouldInstallDictionary(Name, NewHash: String): Boolean;
-var
-  Target, CurrentHash, PreviousHash: String;
-begin
-  Target := InstallRoot + '\' + Name;
-  Result := True;
-  if not FileExists(Target) then Exit;
-  CurrentHash := GetSHA256OfFile(Target);
-  PreviousHash := GetIniString('Hashes', Name, '', StateFile);
-  Result := (CompareText(CurrentHash, NewHash) = 0) or
-    ((PreviousHash <> '') and (CompareText(CurrentHash, PreviousHash) = 0));
-  if not Result then
-    Log('Preserving existing/modified dictionary: ' + Target + '; latest default is in .inno\defaults.');
 end;
 
 function ValidateDirectory(Directory: String): String;
@@ -273,23 +253,30 @@ begin
   if Backup <> '' then Log('Pre-install recovery snapshot: ' + Backup);
 end;
 
+#include "cleanup.iss"
+
 procedure CurStepChanged(CurStep: TSetupStep);
 var
-  I: Integer;
-  #ifndef TestMode
   Message: String;
-  #endif
 begin
-  if CurStep = ssInstall then BackupExistingPayload;
+  if CurStep = ssInstall then begin
+    #ifndef TestMode
+    if FileExists(ExpandConstant('{userdesktop}\Cascadeur 中文版.lnk')) and
+      not DeleteFile(ExpandConstant('{userdesktop}\Cascadeur 中文版.lnk')) then
+      RaiseException('无法清理旧版当前用户桌面快捷方式，请关闭占用程序后重试。');
+    if FileExists(ExpandConstant('{userprograms}\Cascadeur 中文版.lnk')) and
+      not DeleteFile(ExpandConstant('{userprograms}\Cascadeur 中文版.lnk')) then
+      RaiseException('无法清理旧版当前用户开始菜单快捷方式，请关闭占用程序后重试。');
+    #endif
+    BackupExistingPayload;
+  end;
   if CurStep = ssPostInstall then begin
+    DeleteIniSection('Hashes', StateFile);
     if not SetIniString('Install', 'Owner', '{#ProductId}', StateFile) or
       not SetIniString('Install', 'LegacyOwnerSid', LegacySid, StateFile) or
       not SetIniString('Install', 'SettingsPath', SettingsPath, StateFile) or
       not SetIniString('Install', 'ProxyOwnerSid', ProxySid, StateFile) then
       RaiseException('文件已安装，但安装记录无法保存；请保留日志并重新运行安装器。');
-    for I := 0 to GetArrayLength(PayloadNames) - 1 do
-      if not SetIniString('Hashes', PayloadNames[I], PayloadHashes[I], StateFile) then
-        RaiseException('文件已安装，但文件校验记录无法保存；请重新运行安装器。');
     #ifndef TestMode
     if WizardIsTaskSelected('fileassoc') then begin
       SetLength(Message, 1024);
@@ -298,6 +285,9 @@ begin
       Log('Verified official command proxy installed for user: ' + ProxySid);
     end;
     #endif
+    { Upgrade snapshots are transactional only. A successful installation
+      keeps exactly the new package payload and removes all prior snapshots. }
+    CleanupInstallerBackups;
   end;
 end;
 
@@ -349,12 +339,9 @@ begin
       RaiseException('无法恢复旧版打开方式，已停止卸载。');
 end;
 
-#include "cleanup.iss"
-
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
-  I: Integer;
-  Name, Target, Sid, Message: String;
+  Sid, Message: String;
 begin
   if CurUninstallStep = usUninstall then begin
     try
@@ -375,16 +362,6 @@ begin
     end;
     RemoveOwnedAssociation;
     CleanupInstallerBackups;
-
-    for I := 0 to GetArrayLength(PayloadNames) - 1 do begin
-      Name := PayloadNames[I];
-      Target := InstallRoot + '\' + Name;
-      if IsDictionary(Name) and FileExists(Target) then begin
-        if CompareText(GetSHA256OfFile(Target), PayloadHashes[I]) = 0 then begin
-          if not DeleteFile(Target) then RaiseException('词典文件被占用，已停止卸载：' + Target);
-        end else Log('Keeping modified/unknown dictionary: ' + Target);
-      end;
-    end;
   end;
   if CurUninstallStep = usPostUninstall then begin
     DeleteFile(StateFile);

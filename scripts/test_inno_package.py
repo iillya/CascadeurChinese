@@ -10,14 +10,15 @@ SPEC.loader.exec_module(PACKAGE)
 
 
 class InnoPackageTests(unittest.TestCase):
-    def test_generated_dictionary_policy(self):
+    def test_generated_payload_replaces_old_files(self):
         files, code = PACKAGE.includes([
             ("translations\\dictionary_zh.json", Path("C:/payload/dictionary_zh.json"), "a" * 64),
             ("CascadeurChineseHook.dll", Path("C:/payload/Hook.dll"), "b" * 64),
         ])
-        self.assertIn("uninsneveruninstall", files)
-        self.assertIn("ShouldInstallDictionary", files)
-        self.assertIn(".inno\\defaults", files)
+        self.assertNotIn("uninsneveruninstall", files)
+        self.assertNotIn("ShouldInstallDictionary", files)
+        self.assertNotIn(".inno\\defaults", files)
+        self.assertEqual(files.count("Flags: ignoreversion"), 2)
         self.assertIn("SetArrayLength(PayloadNames, 2)", code)
         self.assertNotIn("recursesubdirs", files)
 

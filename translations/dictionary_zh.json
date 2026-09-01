@@ -3539,6 +3539,23 @@
     "tutorials yet": "教程尚未",
     "use this feature on your end. We will be happy to provide you with an individual price quote.": "使用此功能。我们很乐意为您提供专属报价。",
     "version of Cascadeur": "Cascadeur 版本",
-    "Сlear custom set cached additional animation data": "清除自定义设置的附加动画缓存数据"
+    "Сlear custom set cached additional animation data": "清除自定义设置的附加动画缓存数据",
+    "Auto posing fingers": "自动摆放手指",
+    "Auto posing tool": "自动摆姿工具",
+    "Bend backward": "向后弯曲",
+    "Custom selectable": "自定义可选",
+    "Display in outliner": "在大纲中显示",
+    "Enforce fk in interpolation": "在插值中强制使用 FK",
+    "Ik/fk behaviour": "IK/FK 行为",
+    "Limb": "肢体",
+    "Local position": "局部位置",
+    "Local rotation": "局部旋转",
+    "Local scale": "局部缩放",
+    "Point  color": "点颜色",
+    "Point color": "点颜色",
+    "Pre tip": "前端",
+    "Reference": "参考",
+    "Type selectable": "类型可选",
+    "SingleType": "单一类型"
   }
 }

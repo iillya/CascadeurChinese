@@ -1,5 +1,6 @@
-{ Only installer-owned snapshot filenames are deleted. Never recurse through
-  ChineseLauncher or unknown directories. Called after restoration succeeds. }
+{ Delete only installer-owned transaction snapshots and legacy default copies.
+  Never recurse through ChineseLauncher or unknown directories. Called after a
+  successful install or after uninstall restoration succeeds. }
 procedure DeleteOwnedFile(FileName: String);
 begin
   if FileExists(FileName) and not DeleteFile(FileName) then
