@@ -2,7 +2,7 @@
 #ifndef PayloadInclude
   #error Build using source\build_inno.bat
 #endif
-#define ProductId "CascadeurChinese.Inno.Experimental"
+#define ProductId "CascadeurChinese.Inno.Release"
 #define ProductName "Cascadeur 中文补丁"
 #define AssocId "CascadeurChinese.Inno.casc"
 #ifdef TestMode
@@ -60,7 +60,7 @@ DialogFontSize=10
 
 [Messages]
 SelectDirLabel3=请选择包含 cascadeur.exe 的软件目录。补丁只写入其下的 ChineseLauncher 文件夹。
-FinishedLabel=中文补丁已安装。请通过“Cascadeur 中文版”快捷方式启动软件。%n%n卸载请使用 Windows“已安装的应用”。卸载会清除补丁文件及备份，保留您另行创建或修改的词典和文件。
+FinishedLabel=中文补丁已安装。请通过“Cascadeur 中文版”快捷方式启动软件。%n%n卸载请使用 Windows“已安装的应用”。卸载会完整删除 ChineseLauncher 文件夹及其中的全部文件，不保留词典、设置或备份。
 
 [Tasks]
 Name: "desktopicon"; Description: "创建公共桌面快捷方式"
@@ -76,6 +76,11 @@ Source: "{#SupportDll}"; DestDir: "{app}\ChineseLauncher\.inno"; DestName: "supp
 Name: "{autodesktop}\Cascadeur 中文版"; Filename: "{app}\ChineseLauncher\CascadeurChineseLauncher.exe"; WorkingDir: "{app}"; IconFilename: "{app}\ChineseLauncher\CascadeurChineseLauncher.exe"; IconIndex: 0; Tasks: desktopicon
 Name: "{autoprograms}\Cascadeur 中文版"; Filename: "{app}\ChineseLauncher\CascadeurChineseLauncher.exe"; WorkingDir: "{app}"; IconFilename: "{app}\ChineseLauncher\CascadeurChineseLauncher.exe"; IconIndex: 0; Tasks: startmenuicon
 #endif
+
+[UninstallDelete]
+; 用户明确要求完整卸载。范围固定为 Cascadeur 下的 ChineseLauncher，
+; 不允许使用通配目录，也不触碰 Cascadeur 的其他文件。
+Type: filesandordirs; Name: "{app}\ChineseLauncher"
 
 ; Associations are handled by the native, ownership-checked proxy journal.
 ; Do not create a new default ProgID or write UserChoice.
@@ -176,7 +181,8 @@ begin
   SettingsPath := BufferText(SettingsPath);
   #endif
   ExistingOwner := GetIniString('Install', 'Owner', '', StateFile);
-  if (ExistingOwner <> '') and (ExistingOwner <> '{#ProductId}') then begin
+  if (ExistingOwner <> '') and (ExistingOwner <> '{#ProductId}')
+       and (ExistingOwner <> 'CascadeurChinese.Inno.Experimental') then begin
     Result := 'ChineseLauncher 的安装记录属于另一安装器，已停止覆盖。';
     Exit;
   end;
@@ -277,6 +283,10 @@ begin
       not SetIniString('Install', 'SettingsPath', SettingsPath, StateFile) or
       not SetIniString('Install', 'ProxyOwnerSid', ProxySid, StateFile) then
       RaiseException('文件已安装，但安装记录无法保存；请保留日志并重新运行安装器。');
+      { Remove the old Experimental uninstall record so two installers cannot
+        later try to uninstall the same shared ChineseLauncher folder. }
+      RegDeleteKeyIncludingSubkeys(HKLM64,
+        'Software\Microsoft\Windows\CurrentVersion\Uninstall\CascadeurChinese.Inno.Experimental_is1');
     #ifndef TestMode
     if WizardIsTaskSelected('fileassoc') then begin
       SetLength(Message, 1024);
@@ -362,13 +372,5 @@ begin
     end;
     RemoveOwnedAssociation;
     CleanupInstallerBackups;
-  end;
-  if CurUninstallStep = usPostUninstall then begin
-    DeleteFile(StateFile);
-    RemoveDir(InstallRoot + '\translations');
-    RemoveDir(InstallRoot + '\.inno\defaults');
-    RemoveDir(InstallRoot + '\.inno');
-    RemoveDir(InstallRoot);
-    { Only unknown/user-created files may prevent removal of empty directories. }
   end;
 end;

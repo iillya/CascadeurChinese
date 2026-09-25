@@ -1,13 +1,9 @@
 """Prepare review candidates; never rewrite the formal dictionary automatically."""
 
 import argparse
-import concurrent.futures
 import json
 import pathlib
 import re
-import time
-import urllib.parse
-import urllib.request
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 WORKSPACE = ROOT.parent
@@ -49,35 +45,11 @@ def eligible(text: str) -> bool:
     return bool(re.search(r"[A-Za-z]", value))
 
 
-def translate(text: str) -> str:
-    # Repair a mojibake sequence present in the host's captured tooltips only
-    # for translation input; the exact English dictionary key is preserved.
-    query = text.replace("��", "'")
-    url = (
-        "https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=zh-CN&dt=t&q="
-        + urllib.parse.quote(query)
-    )
-    for attempt in range(4):
-        try:
-            with urllib.request.urlopen(url, timeout=20) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-            result = "".join(part[0] for part in payload[0] if part and part[0]).strip()
-            if result and result != text:
-                return result
-        except Exception:
-            if attempt == 3:
-                return ""
-            time.sleep(0.5 * (attempt + 1))
-    return ""
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--capture", type=pathlib.Path, default=CAPTURE)
     parser.add_argument("--output", type=pathlib.Path,
                         default=ROOT / "build" / "capture_review.json")
-    parser.add_argument("--machine-translate", action="store_true",
-                        help="Explicitly allow sending candidate text to Google Translate")
     args = parser.parse_args()
     if args.output.resolve() == DICTIONARY.resolve():
         parser.error("review output must not overwrite the formal dictionary")
@@ -99,16 +71,7 @@ def main() -> None:
                 reused.setdefault(key, value)
 
     pending = [key for key in capture if key not in formal and key not in reused and eligible(key)]
-    generated = {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-        futures = {executor.submit(translate, key): key for key in pending} if args.machine_translate else {}
-        for future in concurrent.futures.as_completed(futures):
-            key = futures[future]
-            value = future.result()
-            if value and value != key and "�" not in value:
-                generated[key] = value
-
-    candidates = {key: reused.get(key, generated.get(key, ""))
+    candidates = {key: reused.get(key, "")
                   for key in capture if key not in formal and eligible(key)}
     if args.output.exists():
         # Fail on malformed existing JSON; never discard hand-reviewed values.
@@ -124,7 +87,7 @@ def main() -> None:
     temporary.replace(args.output)
     print(json.dumps({
         "captured": len(capture), "eligible": len(pending) + len(reused),
-        "reused": len(reused), "translated": len(generated),
+        "reused": len(reused), "translated": 0,
         "formal_total": len(formal),
     }, ensure_ascii=False))
 

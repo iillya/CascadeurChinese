@@ -150,7 +150,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ PWSTR cmdLine, _I
         !IsAmd64Image(root + L"\\Qt6Core.dll") || !IsAmd64Image(root + L"\\Qt6Gui.dll") ||
         !IsAmd64Image(root + L"\\Qt6Qml.dll") || !IsAmd64Image(root + L"\\Qt6Quick.dll")) {
         MessageBoxW(nullptr,
-                    L"目标程序或 Qt 组件不兼容。支持 Qt 6.5.1、6.5.3 x64，且各组件须为同一版本。",
+                    L"目标 Qt 6 x64 组件不完整、版本不一致，或缺少必要绘制能力。",
                     L"Cascadeur 中文补丁", MB_OK | MB_ICONERROR);
         return 1;
     }

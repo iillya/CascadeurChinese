@@ -53,7 +53,7 @@
 #include "deep_capture.h"
 
 extern "C" __declspec(dllexport) int __cdecl cascadeur_localizer_api_version() { return 1; }
-extern "C" __declspec(dllexport) const char* __cdecl cascadeur_localizer_version() { return "0.2.1"; }
+extern "C" __declspec(dllexport) const char* __cdecl cascadeur_localizer_version() { return "1.0.0"; }
 
 namespace {
 HMODULE g_self = nullptr;
@@ -107,6 +107,7 @@ TextNodeCtorFn g_textNodeCtor = nullptr;
 TextNodeDtorFn g_textNodeDtor = nullptr;
 std::mutex g_textNodeMutex;
 std::unordered_map<void*, bool> g_textNodePreserve;
+std::unordered_map<void*, QPointer<QQuickItem>> g_textNodeOwners;
 std::atomic_bool g_textNodeTrackingReady{false};
 
 void* __fastcall hookedTextNodeCtor(void* node, QQuickItem* owner)
@@ -116,6 +117,7 @@ void* __fastcall hookedTextNodeCtor(void* node, QQuickItem* owner)
         const bool preserve = !owner || CascadeurSceneTextPolicy::preserve(owner);
         std::lock_guard<std::mutex> lock(g_textNodeMutex);
         g_textNodePreserve[node] = preserve;
+        g_textNodeOwners[node] = QPointer<QQuickItem>(owner);
     } catch (...) {} // unregistered nodes are always preserved
     return result;
 }
@@ -125,6 +127,7 @@ void __fastcall hookedTextNodeDtor(void* node)
     {
         std::lock_guard<std::mutex> lock(g_textNodeMutex);
         g_textNodePreserve.erase(node);
+        g_textNodeOwners.erase(node);
     }
     g_textNodeDtor(node);
 }
@@ -135,6 +138,14 @@ bool preserveTextNode(void* node)
     std::lock_guard<std::mutex> lock(g_textNodeMutex);
     const auto found = g_textNodePreserve.find(node);
     return found == g_textNodePreserve.end() || found->second;
+}
+
+QPointer<QQuickItem> textNodeOwner(void* node)
+{
+    if (!g_textNodeTrackingReady.load(std::memory_order_acquire)) return {};
+    std::lock_guard<std::mutex> lock(g_textNodeMutex);
+    const auto found = g_textNodeOwners.find(node);
+    return found == g_textNodeOwners.end() ? QPointer<QQuickItem>() : found->second;
 }
 using FontAdvanceFn = int (__fastcall *)(const QFontMetrics*, const QString&, int);
 using FontAdvanceOptFn = int (__fastcall *)(const QFontMetrics*, const QString&, const QTextOption&);
@@ -266,7 +277,7 @@ int __fastcall hookedFontAdvance(const QFontMetrics* metrics, const QString& tex
     const QString translated = translateText(text);
     if (translated.isEmpty()) return g_fontAdvance(metrics, text, length);
     const int pad = std::max(0, g_fontAdvance(metrics, QStringLiteral("中"), -1)) / 2;
-    return g_fontAdvance(metrics, translated, -1) + pad;
+    return g_fontAdvance(metrics, translated, -1) + pad + pad;
 }
 
 int __fastcall hookedFontAdvanceOpt(const QFontMetrics* metrics, const QString& text,
@@ -277,7 +288,7 @@ int __fastcall hookedFontAdvanceOpt(const QFontMetrics* metrics, const QString& 
     const QString translated = translateText(text);
     if (translated.isEmpty()) return g_fontAdvanceOpt(metrics, text, option);
     const int pad = std::max(0, g_fontAdvanceOpt(metrics, QStringLiteral("中"), option)) / 2;
-    return g_fontAdvanceOpt(metrics, translated, option) + pad;
+    return g_fontAdvanceOpt(metrics, translated, option) + pad + pad;
 }
 
 qreal __fastcall hookedFontAdvanceF(const QFontMetricsF* metrics, const QString& text, int length)
@@ -288,7 +299,7 @@ qreal __fastcall hookedFontAdvanceF(const QFontMetricsF* metrics, const QString&
     const QString translated = translateText(text);
     if (translated.isEmpty()) return g_fontAdvanceF(metrics, text, length);
     const qreal pad = std::max<qreal>(0.0, g_fontAdvanceF(metrics, QStringLiteral("中"), -1)) * 0.5;
-    return g_fontAdvanceF(metrics, translated, -1) + pad;
+    return g_fontAdvanceF(metrics, translated, -1) + pad + pad;
 }
 
 qreal __fastcall hookedFontAdvanceFOpt(const QFontMetricsF* metrics, const QString& text,
@@ -299,7 +310,7 @@ qreal __fastcall hookedFontAdvanceFOpt(const QFontMetricsF* metrics, const QStri
     const QString translated = translateText(text);
     if (translated.isEmpty()) return g_fontAdvanceFOpt(metrics, text, option);
     const qreal pad = std::max<qreal>(0.0, g_fontAdvanceFOpt(metrics, QStringLiteral("中"), option)) * 0.5;
-    return g_fontAdvanceFOpt(metrics, translated, option) + pad;
+    return g_fontAdvanceFOpt(metrics, translated, option) + pad + pad;
 }
 
 std::unique_ptr<QTextLayout> makeDisplayLayout(const QTextLayout* source, const QString& text)
@@ -322,8 +333,19 @@ std::unique_ptr<QTextLayout> makeDisplayLayout(const QTextLayout* source, const 
         if (!line.isValid()) break;
         if (source->lineCount() > 0) {
             const QTextLine original = source->lineAt(std::min(i, source->lineCount() - 1));
-            const qreal width = original.width() > 0.0
+            const qreal sourceWidth = original.width() > 0.0
                 ? original.width() : std::max<qreal>(1.0, original.naturalTextWidth());
+            // Implicit-size labels commonly have a centered text option while
+            // their line is only as wide as the English glyphs. Reusing that
+            // English width centers a shorter Chinese translation inside the
+            // old word box and visibly shifts its left edge. Let content-sized
+            // lines adopt the translated natural width; genuinely fixed-width
+            // controls keep their original alignment area.
+            const bool contentSized =
+                sourceWidth <= original.naturalTextWidth() + 1.0;
+            if (contentSized) line.setLineWidth(1000000.0);
+            const qreal width = contentSized
+                ? std::max<qreal>(1.0, line.naturalTextWidth()) : sourceWidth;
             line.setLineWidth(width);
             line.setPosition(original.position());
         }
@@ -347,6 +369,31 @@ bool hasUnsafeTextFormats(const QTextLayout* layout)
     // has character-dependent semantics and remains untouched.
     return formats.size() != 1 || formats.constFirst().start != 0 ||
            formats.constFirst().length < layout->text().size();
+}
+
+bool looksTruncated(const QString& text)
+{
+    return text.contains(QChar(0x2026));
+}
+
+QString recoverFullTextFromItem(QQuickItem* item, const QString& displayText)
+{
+    if (!item || !looksTruncated(displayText)) return {};
+    static const char* properties[] = {
+        "text", "toolTip", "title", "label", "displayText",
+        "placeholderText", "statusTip", "accessibleName"
+    };
+    for (QQuickItem* current = item; current; current = current->parentItem()) {
+        for (const char* property : properties) {
+            const QVariant value = current->property(property);
+            if (!value.isValid() || !value.canConvert<QString>()) continue;
+            const QString candidate = value.toString();
+            if (candidate.isEmpty() || candidate == displayText) continue;
+            if (!looksTranslatable(candidate) || looksTruncated(candidate)) continue;
+            return candidate;
+        }
+    }
+    return {};
 }
 
 void __fastcall hookedAddTextLayout(
@@ -374,8 +421,15 @@ void __fastcall hookedAddTextLayout(
     const bool unsafeFormats = layout && hasUnsafeTextFormats(layout);
     const bool preedit = layout && !layout->preeditAreaText().isEmpty();
     const bool alreadyElided = layout && layout->text().contains(QChar(0x2026));
-    if (!layout || selected || !wholeLayout || unsafeFormats || preedit || alreadyElided ||
-        preserveTextNode(node)) {
+    const bool preserve = preserveTextNode(node);
+    QString recoveredFull;
+    if (alreadyElided && layout && !preserve) {
+        QPointer<QQuickItem> owner = textNodeOwner(node);
+        if (owner)
+            recoveredFull = recoverFullTextFromItem(owner.data(), layout->text());
+    }
+    if (!layout || selected || !wholeLayout || unsafeFormats || preedit ||
+        (alreadyElided && recoveredFull.isEmpty()) || preserve) {
         g_originalAddTextLayout(node, position, layout, color, style, styleColor,
             anchorColor, selectionColor, selectedTextColor, selectionStart,
             selectionEnd, lineStart, lineCount);
@@ -383,7 +437,8 @@ void __fastcall hookedAddTextLayout(
     }
     DisplayHookGuard guard;
     try {
-        const QString replacement = translateText(layout->text(), true);
+        const QString source = recoveredFull.isEmpty() ? layout->text() : recoveredFull;
+        const QString replacement = translateText(source, true);
         if (!replacement.isEmpty()) {
             auto display = makeDisplayLayout(layout, replacement);
             if (display && display->lineCount() > 0) {
@@ -713,7 +768,6 @@ public:
         }
         if (isUp && toggleHandled_ && vk == toggleHandled_) {
             toggleHandled_ = 0;
-            QTimer::singleShot(0, QCoreApplication::instance(), [] { toggleTranslation(); });
             return consume();
         }
         if (isUp && vk == VK_OEM_3 && tildeHandled_) {
@@ -742,6 +796,9 @@ public:
         const UINT toggleVk = g_toggleVk.load(std::memory_order_acquire);
         if (!shift && vk == toggleVk) {
             toggleHandled_ = vk;
+            QTimer::singleShot(0, QCoreApplication::instance(), [] {
+                toggleTranslation();
+            });
             return consume();
         }
         return false;
@@ -798,9 +855,10 @@ void adjustMenuWidths(QQuickItem* menuBar)
             item->setWidth(std::max(item->property(originalWidthName).toReal(), englishWidth));
             continue;
         }
-        const qreal cjkSlack = metrics.horizontalAdvance(QStringLiteral("中")) * 0.5;
+        // The font-width hook now adds half a CJK glyph on both sides, so no
+        // separate slack is needed here; adding it again would double-pad.
         const qreal targetWidth = std::ceil(metrics.horizontalAdvance(translated) +
-                                            left + right + cjkSlack);
+                                            left + right);
         item->setImplicitWidth(targetWidth);
         item->setWidth(targetWidth);
     }

@@ -74,12 +74,17 @@ int main(int argc, char** argv) {
     CHECK(click(w,"hotkeyCancel") && Config::load(path) == 'A');
     QCoreApplication::sendPostedEvents(nullptr,QEvent::DeferredDelete);
     w = make(); CHECK(w && QTest::qWaitForWindowExposed(w));
-    CHECK(click(w,"hotkeyReset"));
     failSave = true;
-    CHECK(click(w,"hotkeyAccept") && w->isVisible() && Config::load(path) == 'A');
+    CHECK(click(w,"hotkeyReset") && w->isVisible() && Config::load(path) == 'A');
     CHECK(!w->property("errorText").toString().isEmpty());
     failSave = false;
-    CHECK(click(w,"hotkeyAccept") && Config::load(path) == Config::defaultKey);
+    CHECK(click(w,"hotkeyReset") && w->isVisible() &&
+          saved == Config::defaultKey &&
+          Config::load(path) == Config::defaultKey &&
+          w->property("pendingVirtualKey").toInt() == Config::defaultKey &&
+          w->property("pendingKeyName").toString() == "F3" &&
+          w->property("errorText").toString().isEmpty());
+    CHECK(click(w,"hotkeyCancel") && Config::load(path) == Config::defaultKey);
     QCoreApplication::sendPostedEvents(nullptr,QEvent::DeferredDelete);
     CHECK(!Config::save(path,0));
     CHECK(!Config::save(dir.path(),Config::defaultKey));
@@ -101,7 +106,7 @@ int main(int argc, char** argv) {
     w->close(); QCoreApplication::sendPostedEvents(nullptr,QEvent::DeferredDelete);
     for (int key : {Qt::Key_F1,Qt::Key_F24,Qt::Key_Z,Qt::Key_0,Qt::Key_Space,Qt::Key_Delete})
         CHECK(Config::toQtKey(Config::toVirtualKey(key)) == key);
-    std::puts("PASS: recording, Escape, modifier rejection, Cancel, reset, save failure, separate-process persistence");
+    std::puts("PASS: recording, Escape, modifier rejection, Cancel, immediate reset, save failure, separate-process persistence");
     std::printf("User config: %s\n",qPrintable(Config::path()));
     return 0;
 }

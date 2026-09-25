@@ -152,14 +152,14 @@ extern "C" __declspec(dllexport) BOOL __stdcall CheckTarget(
             if (!regularFile(root + L"\\cascadeur.exe") || !amd64(root + L"\\cascadeur.exe"))
                 return fail(L"请选择包含 x64 cascadeur.exe 的软件目录，不要选择 ChineseLauncher 子目录。", message, capacity);
             if (!CascadeurQtCompatibility::supportedDirectory(root))
-                return fail(L"目标 Qt 组件不完整或不兼容。支持 Qt 6.5.1、6.5.3 x64，且各组件须为同一版本。", message, capacity);
+                return fail(L"目标 Qt 6 x64 组件不完整、版本不一致或缺少必要绘制能力。", message, capacity);
             for (const wchar_t* name : CascadeurQtCompatibility::modules) {
                 const std::wstring file = root + L"\\" + name;
                 if (!regularFile(file) || !amd64(file))
                     return fail(L"目标 Qt 组件必须为完整的 x64 文件。", message, capacity);
             }
             if (GetFileAttributesW((root + L"\\Qt5Core.dll").c_str()) != INVALID_FILE_ATTRIBUTES)
-                return fail(L"检测到 Qt5Core.dll，不属于当前已验证版本。", message, capacity);
+                return fail(L"检测到 Qt5Core.dll；当前汉化仅支持 Qt 6 ABI。", message, capacity);
         }
         if (!hostStopped(root))
             return fail(L"Cascadeur 或中文启动器正在运行，或无法确认进程状态。请保存工程并正常退出后重试。", message, capacity);

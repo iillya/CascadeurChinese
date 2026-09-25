@@ -1,67 +1,148 @@
-# CascadeurChinese
+# Cascadeur 中文补丁
 
-当前仅提供 **Inno Setup 安装器**，文件名为 `CascadeurChineseInstaller.exe`。安装、更新、迁移及卸载说明见 [安装指南](docs/installer.md)。卸载请使用 Windows“已安装的应用”，不再使用旧安装器。
+面向 Cascadeur Windows 版的第三方简体中文补丁。
 
-Cascadeur 的简体中文显示层汉化。支持 **Cascadeur 2024.1.0（Qt 6.5.1）** 和 **2026.1.2（Qt 6.5.3）**，均为 Windows x64。双版本验证范围见 [兼容性记录](docs/compatibility-2024.md)。
+补丁只替换界面上显示的文字，不修改 Cascadeur 主程序、工程数据、场景名称或命令参数。需要英文界面时，可以随时一键切换回来。
 
-## 纯显示层原则
+> 当前版本：1.0.0
+>
+> 系统要求：Windows 10/11 x64
 
-本项目只在 Qt Quick 把文字生成画面节点时，将原 `QTextLayout` 复制成临时布局并替换其中的显示文字。它不会修改 QML 的 `text` 属性、控件状态、场景数据、命令参数或 `.casc` 文件，也不会覆盖 Cascadeur 的任何原始文件。
+## 下载与安装
 
-实现入口是 `QQuickTextNode::addTextLayout`。启动器只负责以挂起状态启动 `cascadeur.exe`、加载汉化 DLL，再继续运行。关闭 Cascadeur 后，Hook 随进程消失。
+1. 从项目的 [`dist`](./dist) 目录下载 `CascadeurChineseInstaller.exe`。
+2. 完全退出 Cascadeur。
+3. 运行安装器；出现 Windows 权限提示时选择“是”。
+4. 选择包含 `cascadeur.exe` 的软件目录。
+   - 默认目录：`C:\Program Files\Cascadeur`
+5. 按向导完成安装。
+6. 使用桌面或开始菜单里的“Cascadeur 中文版”启动软件。
 
-## 使用
+安装器只会在 Cascadeur 目录下创建 `ChineseLauncher` 文件夹，不会覆盖原版 `cascadeur.exe`。直接启动原版 `cascadeur.exe` 时不会加载中文补丁。
 
-运行发布包中的 `CascadeurChineseInstaller.exe`，选择包含 `cascadeur.exe` 的目录（通常为 `C:\Program Files\Cascadeur`）。文件只安装到其下的 `ChineseLauncher` 独立目录，并创建“Cascadeur 中文版”快捷方式。
+## 兼容范围
 
-工程关联选项接管经过验证的官方打开命令，不强制更改默认应用。卸载仅恢复仍属于补丁的值，保留后来的外部修改。快捷方式面向所有用户，关联只针对当前桌面用户。
+适用于使用完整 Qt 6 x64 运行时的 Cascadeur，不维护具体软件版本白名单。
+安装器会检查 Qt 组件完整性和一致性；运行时再检查所需私有绘制入口，缺失时
+安全停止相应 Hook。当前已覆盖 2024.1.0 / Qt 6.5.1 和
+2026.1.2 / Qt 6.5.3。
 
-卸载只删除安装包自有文件，不递归清空 `ChineseLauncher`；额外文件和已修改的词典会保留。安装过程若中途失败，已完成的文件替换不会整体回滚，修复后可重试安装。
+## 日常使用
 
-- `F3`：切换中文/英文显示；右键“中/英”可录入新单键，点击“确定”后至 `%LOCALAPPDATA%\CascadeurChinese\settings.json`，下次启动读取。
-- `Shift` + `~`：增量采集并导出到桌面；自动展开已识别的对象属性分组补采，结束后恢复折叠状态和滚动位置。重复执行只追加新词条，不覆盖已填写的译文。采集期间暂时拦截编辑操作，按 `Esc` 中止并进入恢复；不新增快捷键。
+### 切换中文和英文
 
-自动展开是独立的手动 UI 采集辅助模块，不属于只读显示翻译核心。适配依据为 Cascadeur 2026.1.2 内嵌 QML 的 `view::PropertyEditor` 分组结构，仅调用分组原有的 `switchExpand`，不调用图钉或参数修改方法。不匹配该结构时仅只读采集；不能保证覆盖其他面板、虚拟化列表或尚未加载的对象类型。展开阶段上限为 60 秒/128 组，诊断写入临时目录 `Cascadeur_deep_capture.json`；无法恢复的分组会提示。该自动展开行为是当前项目的显式采集扩展，不宣称符合统一规范的“只读嗅探不展开”条款。
-- 卸载：通过 Windows“已安装的应用”卸载“Cascadeur 中文补丁”
+- 按 `F3` 切换中文/英文界面。
+- 也可以点击菜单栏中的“中/英”。
+- 右键点击“中/英”可修改切换快捷键。
+- 修改后的快捷键会自动保存，下次启动继续使用。
 
-## 项目结构
+如果自定义快捷键失效，可以在快捷键设置窗口中重置为 `F3`。
 
-- `source/`：显示层 Hook、启动器、安装器和构建脚本
-- `source/detours/`：Microsoft Detours 注入/挂钩组件
-- `translations/dictionary_zh.json`：清洗、复核并合并后的正式中文词典
-- `scripts/`：词典检查和候选文字扫描工具
-- `icon/`：程序图标资源
+### 采集未翻译的界面文字
 
-## 构建
+按 `Shift + ~` 采集当前已经加载的未翻译 UI 文字。采集结果保存在：
 
-准备 Visual Studio 2022 C++ 工具链，以及 Qt 6.5.3 MSVC 2019 x64 开发文件。项目优先使用工作区统一目录 `_ThirdParty\Qt\6.5.3\msvc2019_64`，也可放到仓库的 `third_party\qt6sdk`。随后运行 `source\build.bat`。
+```text
+桌面\Cascadeur_untranslated_zh.json
+```
 
-产物位于 `build\out`，最终安装包位于 `dist`。
+采集功能不会修改工程数据。采集时会尝试临时展开已识别的对象属性分组，并在结束后恢复原来的折叠状态和滚动位置；未识别的折叠面板、尚未打开的菜单和尚未创建的页面，仍可能需要用户先打开，相关文字才会被软件加载。
 
-自有 C++ 使用 `/W4 /WX`（警告视为构建失败）。`source\build.bat --analyze` 额外执行 MSVC 静态分析；构建后运行 `scripts\test_all.bat` 执行独立回归检查，不启动或注入 Cascadeur。测试依赖当前 Qt 6.5.3 环境、用于拒绝测试的 Qt 6.6.0，以及 `scripts/requirements-ui-extraction.txt` 和 `scripts/requirements-text-utils.txt` 中的 Python 依赖（当前位于 `build/extraction-deps`）。
+## 哪些内容会翻译
 
-`source/translation_policy.h` 集中管理过滤、归一化及有界缓存；`source/file_association.h` 管理用户级工程关联备份/恢复。最新结果见 [完整复审记录](docs/code-audit-2026-08-31-followup.md)，此前记录仅作为历史依据保留。
+补丁主要翻译：
 
-后台不开启常驻轮询或自动嗅探：菜单安装依靠事件并合并 200ms 内的请求；绘制诊断探针仅在初始化后 5 秒内记录，窗口诊断在第 2/5 秒各写一次。深度采集的 300ms 定时器仅在手动嗅探期间运行。关闭汉化时绘制直接透传，但用于后续重新开启的节点生命周期跟踪仍保留，不宣称零开销。
+- 菜单、按钮和选项卡；
+- 工具栏、工具提示和状态提示；
+- 属性面板、设置项和常见弹窗；
+- 下拉列表和其他常见 Qt/Qt Quick 控件。
 
-## 已知边界
+为了避免破坏工程与工作流，下列内容通常保持原文：
 
-只处理经过 Qt Quick 普通文本布局渲染的文字。图标内文字、画布自行绘制的字、网页内容或特殊富文本可能保持英文。带选区、格式范围、输入法预编辑内容或指定行片段的布局保持原样；译文无法在原有行数内完整布局时也回退原文。
+- 工程路径、文件名和用户输入；
+- 场景对象、骨骼、节点及资源名称；
+- 快捷键、品牌名、旋转顺序；
+- 内部标识、脚本参数和命令参数。
 
-私有绘制入口当前验证 **Qt 6.5.1 / 6.5.3 x64**。其他版本、缺少组件或混装不同 Qt 补丁版本会被拒绝；不宣称兼容所有 Qt 6.5 软件。引擎与宿主进程同寿命，不支持运行中 `FreeLibrary` 热卸载，需退出软件后卸载安装文件。
+这是“纯显示层汉化”：补丁改变的是你看到的界面文字，不会改写 `.casc` 工程文件中的内容。
 
-“不改宿主数据”不等于“已经可靠识别所有业务文本”：当前字符串级绘制/度量入口无法区分所有同名资源或非编辑状态的输入值。主动嗅探也尚未对白名单之外的 Model 做完整的业务来源识别；输出只作为人工候选，不应直接批量并入正式词典。
+## 更新补丁
 
-`scripts/import_capture_translations.py` 默认离线生成 `build/capture_review.json`，不再直接覆盖正式词典；只有显式使用 `--machine-translate` 才会向外部翻译服务发送候选文字。静态扫描默认不读取示例工程，`--include-samples` 仅用于人工调查。
+1. 退出 Cascadeur。
+2. 运行新版 `CascadeurChineseInstaller.exe`。
+3. 选择原来的 Cascadeur 目录并完成覆盖安装。
 
-`scripts/extract_ui_sources.py` 补充提取内嵌压缩/未压缩 QML、设置/动作名称表和 Python 属性来源；候选只输出供复核，不直接合并词典。用法、结果与动态名称边界见 [界面来源提取记录](docs/ui-source-extraction.md)。
+更新时以新版安装包中的文件为准。安装过程可能临时创建恢复快照，但安装成功后会自动清除，不保留旧版补丁副本。
 
-## 许可
+如果你曾手动修改 `ChineseLauncher` 中的词典或放入其他文件，请在更新前自行复制到别处；安装器不承诺保留这些改动。
 
-项目本身采用 GPL-3.0 License。Microsoft Detours 保留其原始 MIT 许可与版权声明。
+## 卸载
 
-## 项目
+1. 完全退出 Cascadeur。
+2. 打开 Windows“设置”→“应用”→“已安装的应用”。
+3. 找到“Cascadeur 中文补丁”并卸载。
 
-Cascadeur 主窗口顶部 `Help` 右侧依次提供“中/英”、[Bilibili 神说要凑数汉化](https://space.bilibili.com/281243426?spm_id_from=333.1007.0.0) 与 [GitHub 仓库](https://github.com/iillya/CascadeurChinese)。作者和仓库链接使用蓝色文字及手形光标。
+卸载程序会清理补丁快捷方式、快捷键设置和由补丁管理的打开方式，并完整删除 Cascadeur 目录下的 `ChineseLauncher` 文件夹，包括其中的词典、设置、备份以及用户自行添加的文件。
 
-只读兼容性与窗口信息写入临时目录的 `Cascadeur_window_diagnostics.json`；该诊断不调用 `winId()`，也不修改窗口状态。
+卸载不会删除 `cascadeur.exe` 或 Cascadeur 工程文件。如果 `ChineseLauncher` 中有需要保留的个人文件，请务必先复制到其他位置。
+
+## 常见问题
+
+### 启动后仍然是英文
+
+- 确认启动的是“Cascadeur 中文版”，而不是原版 Cascadeur 快捷方式。
+- 按一次 `F3`，检查是否处于英文显示模式。
+- 退出所有 Cascadeur 进程后重新启动中文版。
+- 确认安装器选择的目录内确实存在 `cascadeur.exe`。
+
+### 安装器提示版本不兼容
+
+先确认所选目录是否正确，并确保软件自带完整且版本一致的 Qt 6 x64 组件。
+
+### 只有部分文字被翻译
+
+动态创建、自绘、插件生成、尚未加载或词典尚未收录的文字可能保持英文。可以打开相应界面后按 `Shift + ~` 采集，并将生成的 JSON 用于补充词典。
+
+界面已经只提供省略文本、图片文字或拿不到完整原文时，补丁可能无法可靠匹配，因此会保留原文，避免误翻译其他内容。
+
+### 会影响工程文件吗
+
+不会。中文补丁不修改场景结构、对象名称、工程参数或 `.casc` 文件内容。
+
+### 安全软件提示注入或拦截
+
+补丁需要在 Cascadeur 运行时加载显示层模块，部分安全软件可能因此提示。请只使用本项目发布的安装包；不信任此运行方式时，请不要添加安全软件例外，也不要继续安装。
+
+## 反馈问题
+
+反馈时建议同时提供：
+
+- Cascadeur 的完整版本号；
+- 问题界面的截图；
+- 能稳定复现问题的操作步骤；
+- 使用 `Shift + ~` 生成的未翻译词条文件（如适用）。
+
+- 项目地址：[GitHub](https://github.com/iillya/CascadeurChinese)
+- 作者主页：[Bilibili](https://space.bilibili.com/281243426)
+
+## 开发与构建
+
+普通用户不需要执行本节内容。
+
+```bat
+source\build.bat
+scripts\test_all.bat
+source\build_inno.bat
+```
+
+- `source\build.bat`：构建启动器和汉化模块；
+- `scripts\test_all.bat`：运行自动化检查；
+- `source\build_inno.bat`：验证、测试并生成 `dist\CascadeurChineseInstaller.exe`。
+
+发布安装器使用显式文件清单，仅打包启动器、汉化模块及正式词典。构建所需的 Qt SDK、Visual Studio Build Tools 和 Inno Setup 应按项目脚本要求准备。
+
+## 许可与声明
+
+本项目采用 [GNU GPL v3](./LICENSE) 许可证。项目内的 Microsoft Detours 代码保留其原始 MIT 许可证和版权声明。
+
+Cascadeur 是其权利人的商标。本项目为第三方社区项目，与 Cascadeur 官方无隶属或授权关系。

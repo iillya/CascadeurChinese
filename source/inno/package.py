@@ -56,7 +56,7 @@ def includes(entries):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--iscc', type=Path, default=os.environ.get('INNO_ISCC', ROOT.parent / '_ThirdParty/InnoSetup/7.1.0/ISCC.exe'))
-    parser.add_argument('--version', default='1.0.2')
+    parser.add_argument('--version', default='1.0.0')
     parser.add_argument('--test-mode', action='store_true')
     args = parser.parse_args()
     if not re.fullmatch(r'\d+\.\d+\.\d+(?:\.\d+)?', args.version): parser.error('Invalid version')

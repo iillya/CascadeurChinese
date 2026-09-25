@@ -41,6 +41,18 @@ int main(int argc, char** argv) {
     reader.join(); CHECK(threadOk);
     QTextLayout source(QStringLiteral("File"),QFont());
     source.beginLayout(); source.createLine().setLineWidth(400); source.endLayout();
+    QTextLayout contentSizedSource(QStringLiteral("PROJECTS"), QFont());
+    QTextOption centered;
+    centered.setAlignment(Qt::AlignHCenter);
+    contentSizedSource.setTextOption(centered);
+    contentSizedSource.beginLayout();
+    QTextLine contentSizedLine = contentSizedSource.createLine();
+    contentSizedLine.setLineWidth(contentSizedLine.naturalTextWidth());
+    contentSizedSource.endLayout();
+    auto contentSizedDisplay = makeDisplayLayout(&contentSizedSource, QStringLiteral("项目"));
+    CHECK(contentSizedDisplay && contentSizedDisplay->lineCount() == 1);
+    const QTextLine translatedLine = contentSizedDisplay->lineAt(0);
+    CHECK(translatedLine.width() <= translatedLine.naturalTextWidth() + 1.0);
     int nodeToken = 0;
     g_originalAddTextLayout = recordLayout;
     g_textNodeTrackingReady.store(true);
@@ -80,9 +92,27 @@ int main(int argc, char** argv) {
     g_enabled.store(true); adjustMenuWidths(bar);
     CHECK(item->width() < english && item->property("text").toString() == "Synchronization");
     g_enabled.store(false); adjustMenuWidths(bar); CHECK(item->width() >= english);
+    g_enabled.store(true);
+    g_toggleVk.store(VK_F3);
     NativeKeyFilter native;
+    MSG message{};
+    message.message = WM_KEYDOWN;
+    message.wParam = VK_F3;
+    CHECK(native.nativeEventFilter("windows_generic_MSG",&message,nullptr) &&
+          native.toggleHandled_ == VK_F3);
+    QCoreApplication::processEvents();
+    CHECK(!g_enabled.load());
+    message.lParam = 0x40000000;
+    CHECK(native.nativeEventFilter("windows_generic_MSG",&message,nullptr));
+    QCoreApplication::processEvents();
+    CHECK(!g_enabled.load());
+    message.message = WM_KEYUP;
+    message.lParam = 0xC0000000;
+    CHECK(native.nativeEventFilter("windows_generic_MSG",&message,nullptr) &&
+          !native.toggleHandled_);
+    QCoreApplication::processEvents();
+    CHECK(!g_enabled.load());
     native.toggleHandled_ = VK_F3;
-    MSG message{}; message.message = WM_KEYUP; message.wParam = VK_F3;
     g_settingsOpen = true;
     CHECK(!native.nativeEventFilter("windows_generic_MSG",&message,nullptr) && !native.toggleHandled_);
     g_settingsOpen = false;

@@ -91,6 +91,7 @@ Window {
     property bool listening: false
     property string errorText: ""
     signal acceptRequested()
+    signal resetRequested()
 
     component ActionButton: Button {
         id: control
@@ -163,7 +164,7 @@ Window {
             ActionButton {
                 objectName: "hotkeyReset"
                 text: "重置"
-                onClicked: { settings.listening = false; settings.pendingVirtualKey = 114; settings.pendingKeyName = "F3"; settings.errorText = "" }
+                onClicked: { settings.listening = false; settings.resetRequested() }
             }
             Item { Layout.fillWidth: true }
             ActionButton {
@@ -201,20 +202,41 @@ Window {
                             parentWindow->y() + (parentWindow->height() - window->height()) / 2);
     }
     const QPointer<QQuickWindow> guard(window);
+    const auto save =
+        std::make_shared<std::function<bool(int, QString*)>>(std::move(accepted));
     auto* mapper = new QSignalMapper(window);
     mapper->setMapping(window, 0);
     QObject::connect(window, SIGNAL(acceptRequested()), mapper, SLOT(map()));
     QObject::connect(mapper, &QSignalMapper::mappedInt, window,
-                     [guard, accepted = std::move(accepted)](int) {
+                     [guard, save](int) {
         if (!guard || !guard->isVisible()) return;
         const int key = guard->property("pendingVirtualKey").toInt();
         if (!CascadeurHotkeyConfig::valid(key) || guard->property("listening").toBool()) return;
         QString error;
-        if (!accepted(key, &error)) {
+        if (!(*save)(key, &error)) {
             if (guard) guard->setProperty("errorText", QStringLiteral("保存失败：") + error);
             return;
         }
         if (guard) guard->close();
+    });
+    auto* resetMapper = new QSignalMapper(window);
+    resetMapper->setMapping(window, 0);
+    QObject::connect(window, SIGNAL(resetRequested()), resetMapper, SLOT(map()));
+    QObject::connect(resetMapper, &QSignalMapper::mappedInt, window,
+                     [guard, save](int) {
+        if (!guard || !guard->isVisible()) return;
+        const int key = CascadeurHotkeyConfig::defaultKey;
+        QString error;
+        if (!(*save)(key, &error)) {
+            if (guard) guard->setProperty(
+                "errorText", QStringLiteral("保存失败：") + error);
+            return;
+        }
+        if (!guard) return;
+        guard->setProperty("pendingVirtualKey", key);
+        guard->setProperty("pendingKeyName",
+                           CascadeurHotkeyConfig::name(key));
+        guard->setProperty("errorText", QString());
     });
     // Closing, Cancel, Escape, and engine destruction all release the shortcut
     // suppression exactly once. Defer destruction until event dispatch finishes.

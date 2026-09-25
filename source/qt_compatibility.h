@@ -1,19 +1,18 @@
 #pragma once
 
-// Explicitly tested runtime pairs, not a blanket Qt 6/private-ABI guarantee.
-// No Qt headers: shared by the launcher, installer and injected hook.
+// Qt ABI-family capability checks shared by the launcher, installer and hook.
+// Private Qt Quick entry points are probed separately by the hook before use.
 #include <windows.h>
-#include <cstring>
 #include <string>
 #include <vector>
 
 namespace CascadeurQtCompatibility {
-constexpr bool supported(unsigned major, unsigned minor, unsigned patch) {
-    return major == 6 && minor == 5 && (patch == 1 || patch == 3);
+constexpr bool supported(unsigned major, unsigned, unsigned) {
+    return major == 6;
 }
 
 inline bool supportedRuntime(const char* version) {
-    return version && (std::strcmp(version, "6.5.1") == 0 || std::strcmp(version, "6.5.3") == 0);
+    return version && version[0] == '6' && version[1] == '.';
 }
 
 inline DWORD fileVersion(const std::wstring& path) {
@@ -34,12 +33,33 @@ inline DWORD fileVersion(const std::wstring& path) {
 
 constexpr const wchar_t* modules[] = {L"Qt6Core.dll", L"Qt6Gui.dll", L"Qt6Qml.dll", L"Qt6Quick.dll"};
 
+inline bool hasRequiredQuickExports(const std::wstring& path) {
+    HMODULE quick = LoadLibraryExW(path.c_str(), nullptr,
+                                   DONT_RESOLVE_DLL_REFERENCES);
+    if (!quick) return false;
+    constexpr const char* required[] = {
+        "?addTextLayout@QQuickTextNode@@QEAAXAEBVQPointF@@PEAVQTextLayout@@AEBVQColor@@W4TextStyle@QQuickText@@2222HHHH@Z",
+        "??0QQuickTextNode@@QEAA@PEAVQQuickItem@@@Z",
+        "??1QQuickTextNode@@UEAA@XZ",
+    };
+    bool available = true;
+    for (const char* symbol : required) {
+        if (!GetProcAddress(quick, symbol)) {
+            available = false;
+            break;
+        }
+    }
+    FreeLibrary(quick);
+    return available;
+}
+
 inline bool supportedDirectory(const std::wstring& root) {
     const DWORD version = fileVersion(root + L"\\Qt6Core.dll");
     if (!version) return false;
-    // Individually supported DLLs must not be mixed across patch releases.
+    // A mixed Qt directory is not one coherent ABI family.
     for (const auto* module : modules)
         if (fileVersion(root + L"\\" + module) != version) return false;
-    return GetFileAttributesW((root + L"\\Qt5Core.dll").c_str()) == INVALID_FILE_ATTRIBUTES;
+    return GetFileAttributesW((root + L"\\Qt5Core.dll").c_str()) == INVALID_FILE_ATTRIBUTES &&
+           hasRequiredQuickExports(root + L"\\Qt6Quick.dll");
 }
 }

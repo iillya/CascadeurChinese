@@ -31,7 +31,9 @@ class InnoPackageTests(unittest.TestCase):
     def test_template_safety_contract(self):
         script = (ROOT / "source/inno/CascadeurChinese.iss").read_text(encoding="utf-8")
         self.assertIn("CloseApplications=no", script)
-        self.assertNotIn("[UninstallDelete]", script)
+        self.assertIn("[UninstallDelete]", script)
+        self.assertIn('Type: filesandordirs; Name: "{app}\\ChineseLauncher"', script)
+        self.assertNotIn('Name: "{app}"', script)
         self.assertNotIn("DelTree(", script)
         self.assertNotIn("powershell.exe", script.lower())
         self.assertIn("CascadeurChineseInstaller", script)
